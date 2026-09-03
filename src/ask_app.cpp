@@ -1,5 +1,6 @@
 #include "ask_app.h"
 
+#include "audio_volume.h"
 #include "talk_agent.h"
 
 #include <stdio.h>
@@ -37,6 +38,22 @@ bool AskApp::goBack() {
     leaveTalk();
   }
   return back();
+}
+
+bool AskApp::handleKey(UIEvent &e) {
+  // Only during a conversation: on the picker Up/Down has to stay list
+  // navigation. Every phase is consumed so Page never sees a stray release
+  // and scrolls the page out from under the reading.
+  if (pageId() != kPageTalk) {
+    return false;
+  }
+  if (e.key != UIKey::Up && e.key != UIKey::Down) {
+    return false;
+  }
+  if (e.phase != UIKeyPhase::Up) {
+    adjustVolume(e.key == UIKey::Up ? kVolumeStep : -kVolumeStep);
+  }
+  return true;
 }
 
 void AskApp::frame(Canvas &canvas, InputHub &input, float dt) {
@@ -178,11 +195,15 @@ void AskApp::buildAgents(Page &page) {
                  .value((int16_t)i));
   }
 
+  // Centered while the list is short; axisAlign yields nothing once the rows
+  // outgrow the viewport, so a full list still starts at the top and scrolls.
   auto &col = page.div().style(Style()
                                    .setWidth(Length::Pct(100))
+                                   .setHeight(Length::Pct(100))
                                    .setPadding(Edges(16, 12))
                                    .setGap(10)
-                                   .setColumns(1));
+                                   .setColumns(1)
+                                   .setAlignV(Align::Center));
   col.add(list);
   if (moreLine_[0]) {
     col.add(page.text(moreLine_)
@@ -204,6 +225,8 @@ void AskApp::openTalk(int index) {
   snprintf(agentId_, sizeof(agentId_), "%s", agents_[index].id);
   snprintf(talkTitle_, sizeof(talkTitle_), "%s", agents_[index].name);
   snprintf(talkLine_, sizeof(talkLine_), "Connecting...");
+  formatVolumeLine();
+  volumeDirty_ = false;
   started_ = false;
   failed_ = false;
   errMsg_[0] = '\0';
@@ -224,6 +247,27 @@ void AskApp::resetTalkState() {
 void AskApp::leaveTalk() {
   resetTalkState();
   talkAgentStop();
+}
+
+void AskApp::formatVolumeLine() {
+  snprintf(volumeLine_, sizeof(volumeLine_), "Volume %d%%",
+           (int)ChitramAudio::volumePercent());
+}
+
+bool AskApp::adjustVolume(int16_t delta) {
+  const int16_t cur = ChitramAudio::volumePercent();
+  int16_t next = static_cast<int16_t>(cur + delta);
+  if (next < ChitramAudio::kVolumeMin) next = ChitramAudio::kVolumeMin;
+  if (next > ChitramAudio::kVolumeMax) next = ChitramAudio::kVolumeMax;
+  if (next == cur) {
+    return false;
+  }
+  ChitramAudio::setVolumePercent(next);
+  formatVolumeLine();
+  // The label repaints through the normal tick, which holds off while the
+  // agent is speaking — the gain itself already changed.
+  volumeDirty_ = true;
+  return true;
 }
 
 void AskApp::formatTalkStatus() {
@@ -277,7 +321,7 @@ void AskApp::onTalkTick(UINode &node, float dt) {
   memcpy(prev, self->talkLine_, sizeof(prev));
   self->formatTalkStatus();
 
-  if (strcmp(prev, self->talkLine_) == 0) {
+  if (strcmp(prev, self->talkLine_) == 0 && !self->volumeDirty_) {
     return;
   }
 
@@ -287,10 +331,14 @@ void AskApp::onTalkTick(UINode &node, float dt) {
   }
 
   self->lastUiMs_ = now;
+  self->volumeDirty_ = false;
 
   UIDiv &div = static_cast<UIDiv &>(node);
   if (div.childCount() >= 2 && div.child(1)) {
     static_cast<UIText *>(div.child(1))->setText(self->talkLine_);
+  }
+  if (div.childCount() >= 3 && div.child(2)) {
+    static_cast<UIText *>(div.child(2))->setText(self->volumeLine_);
   }
 
   self->page().invalidateContent();
@@ -320,5 +368,11 @@ void AskApp::buildTalk(Page &page) {
                                    .setWidth(Length::Pct(100))
                                    .setFont(FontRole::Small)
                                    .setColor(failed_ ? th.warning : muted)
+                                   .setAlign(Align::Center)))
+               .add(page.text(volumeLine_)
+                        .style(Style()
+                                   .setWidth(Length::Pct(100))
+                                   .setFont(FontRole::Small)
+                                   .setColor(muted)
                                    .setAlign(Align::Center))));
 }

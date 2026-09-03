@@ -9,7 +9,6 @@
 #include "settings_app.h"
 #include "test_app.h"
 #include "ask_app.h"
-#include "imagine_app.h"
 #include "remote_app.h"
 
 namespace {
@@ -50,7 +49,6 @@ inline void ensureNvsDefaults() {
   ensureNvsBlob("eyes", EyesState{});
   ensureNvsBlob("test", TestState{});
   ensureNvsBlob("ask", AskState{});
-  ensureNvsBlob("imagine", ImagineState{});
   ensureNvsBlob("remote", RemoteState{});
 
   SettingsState settings{};

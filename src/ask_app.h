@@ -39,6 +39,7 @@ public:
 
   void frame(Canvas &canvas, InputHub &input, float dt) override;
   bool goBack() override;
+  bool handleKey(UIEvent &e) override;
 
 protected:
   const char *nvsNamespace() const override { return "ask"; }
@@ -78,9 +79,14 @@ private:
   static void onAgentSelect(UISelect &sel);
 
   // --- Live conversation ---
+  /** Matches the Settings volume slider step. */
+  static constexpr int16_t kVolumeStep = 5;
+
   char talkTitle_[40] = {};
   char talkLine_[48] = "Connecting...";
+  char volumeLine_[24] = {};
   char agentId_[48] = {};
+  bool volumeDirty_ = false;
   bool pendingStart_ = false;
   bool started_ = false;
   bool failed_ = false;
@@ -91,6 +97,8 @@ private:
   void resetTalkState();
   void leaveTalk();
   void formatTalkStatus();
+  void formatVolumeLine();
+  bool adjustVolume(int16_t delta);
   void buildTalk(Page &page);
   static void onTalkTick(UINode &node, float dt);
 };

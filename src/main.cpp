@@ -13,7 +13,6 @@
 #include "settings_app.h"
 #include "eyes_app.h"
 #include "ask_app.h"
-#include "imagine_app.h"
 #include "test_app.h"
 #include "remote_app.h"
 #include "runtime_config.h"
@@ -25,7 +24,6 @@ static LauncherApp launcher(kPanelRect);
 static SettingsApp settings(kPanelRect);
 static EyesApp eyes(kPanelRect);
 static AskApp ask(kPanelRect);
-static ImagineApp imagine(kPanelRect);
 static TestApp test(kPanelRect);
 static RemoteApp remote(kPanelRect);
 static JoystickInput joystick(ChitramInput::kJoyPinX, ChitramInput::kJoyPinY,
@@ -50,7 +48,7 @@ void setup() {
   joystick.tracker().holdDelayMs = ChitramInput::kJoyHoldDelayMs;
   joystick.tracker().holdRepeatMs = ChitramInput::kJoyHoldRepeatMs;
 
-  flow.apps({&launcher, &settings, &eyes, &ask, &imagine, &remote, &test})
+  flow.apps({&launcher, &settings, &eyes, &ask, &remote, &test})
       .config(FlowConfig{}
                   .theme(Theme::FlowTheme())
                   .storage(SdChitram())
