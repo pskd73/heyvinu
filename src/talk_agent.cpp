@@ -45,6 +45,9 @@ static int16_t micTmp[TALK_I2S_BUF_SAMPLES];
 static char signedHost[96];
 static char signedPath[768];
 
+// Agent chosen for this session. Empty means fall back to the configured id.
+static char activeAgentId[48];
+
 static volatile bool pendingInit = false;
 static volatile int pendingPongId = -1;
 static volatile bool pendingPong = false;
@@ -222,7 +225,8 @@ static bool parseWssUrl(const char *url, char *host, size_t hostLen, char *path,
 }
 
 static bool fetchSignedUrl(String &signedUrl) {
-  const char *agentId = getConfig(Config::ElevenlabsAgentId);
+  const char *agentId =
+      activeAgentId[0] ? activeAgentId : getConfig(Config::ElevenlabsAgentId);
   const char *apiKey = getConfig(Config::ElevenlabsApiKey);
   if (!apiKey || !apiKey[0] || !agentId || !agentId[0]) {
     logf("ElevenLabs config missing (Remote or defaults)\n");
@@ -681,9 +685,90 @@ static void stopWsTask() {
   for (int i = 0; i < 50 && wsTaskHandle; i++) delay(10);
 }
 
-bool talkAgentStart(AppHost *host) {
+/**
+ * Parsed straight off the socket behind a filter instead of via getString().
+ *
+ * The raw listing carries access_info, trust_context and per-agent call stats
+ * we never read; buffering all of it as a String and then again as a
+ * JsonDocument puts tens of KB into internal heap right before the session
+ * needs DMA-capable blocks for TLS. The filter keeps the document to a dozen
+ * short strings.
+ */
+int talkAgentFetchList(TalkAgentInfo *out, int maxCount, bool *hasMore,
+                       char *errOut, size_t errLen) {
+  auto fail = [&](const char *msg) {
+    logf("agent list: %s\n", msg);
+    if (errOut && errLen) copyTrunc(errOut, errLen, msg);
+    return -1;
+  };
+
+  if (hasMore) *hasMore = false;
+  if (!out || maxCount <= 0) return fail("Bad args");
+
+  configInit();
+  const char *apiKey = getConfig(Config::ElevenlabsApiKey);
+  if (!apiKey || !apiKey[0]) return fail("No API key");
+
+  if (WiFi.status() != WL_CONNECTED && !connectWifi()) {
+    return fail("Wi-Fi failed");
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  // One past the cap so has_more is right even when the API would have fit
+  // the page exactly.
+  char url[96];
+  snprintf(url, sizeof(url),
+           "https://api.elevenlabs.io/v1/convai/agents?page_size=%d",
+           maxCount + 1);
+  if (!http.begin(client, url)) return fail("HTTP begin failed");
+  http.addHeader("xi-api-key", apiKey);
+
+  const int code = http.GET();
+  if (code != 200) {
+    http.end();
+    char msg[24];
+    snprintf(msg, sizeof(msg), "Agents HTTP %d", code);
+    return fail(msg);
+  }
+
+  JsonDocument filter;
+  filter["has_more"] = true;
+  filter["agents"][0]["agent_id"] = true;
+  filter["agents"][0]["name"] = true;
+
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(
+      doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (err) return fail("Agents parse fail");
+
+  int n = 0;
+  for (JsonObject a : doc["agents"].as<JsonArray>()) {
+    if (n >= maxCount) break;
+    const char *id = a["agent_id"] | "";
+    if (!id[0]) continue;
+    const char *name = a["name"] | "";
+    copyTrunc(out[n].id, sizeof(out[n].id), id);
+    copyTrunc(out[n].name, sizeof(out[n].name), name[0] ? name : "(unnamed)");
+    n++;
+  }
+
+  if (hasMore) *hasMore = (doc["has_more"] | false) || n > maxCount;
+  logf("agent list: %d agent(s)\n", n);
+  return n;
+}
+
+bool talkAgentStart(AppHost *host, const char *agentId) {
   (void)host;
   if (agentActive) return true;
+
+  if (agentId && agentId[0]) {
+    copyTrunc(activeAgentId, sizeof(activeAgentId), agentId);
+  } else {
+    activeAgentId[0] = 0;
+  }
 
   setStatus("Wi-Fi...");
   if (WiFi.status() != WL_CONNECTED) {
@@ -696,10 +781,14 @@ bool talkAgentStart(AppHost *host) {
 
   logMem("boot");
   configInit();
-  if (!getConfig(Config::ElevenlabsApiKey)[0] ||
-      !getConfig(Config::ElevenlabsAgentId)[0]) {
-    setStatus("No EL config");
-    logf("ElevenLabs config missing\n");
+  if (!getConfig(Config::ElevenlabsApiKey)[0]) {
+    setStatus("No EL API key");
+    logf("ElevenLabs API key missing\n");
+    return false;
+  }
+  if (!activeAgentId[0] && !getConfig(Config::ElevenlabsAgentId)[0]) {
+    setStatus("No agent");
+    logf("no agent selected and no configured default\n");
     return false;
   }
 
