@@ -119,21 +119,6 @@ static bool ensurePcmScratch(size_t need) {
   return true;
 }
 
-static int16_t *agentDecBuf = nullptr;
-static size_t agentDecCap = 0;
-
-static bool ensureAgentDec(size_t samples) {
-  if (agentDecCap >= samples) return true;
-  const size_t bytes = samples * sizeof(int16_t);
-  void *p = heap_caps_realloc(agentDecBuf, bytes,
-                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (!p) p = realloc(agentDecBuf, bytes);
-  if (!p) return false;
-  agentDecBuf = (int16_t *)p;
-  agentDecCap = samples;
-  return true;
-}
-
 static bool ensureTxJson(size_t need) {
   if (txJsonCap >= need) return true;
   void *p = heap_caps_realloc(txJsonBuf, need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -385,56 +370,16 @@ static void sendMicChunkFromUplink() {
   }
 }
 
-static void pushAgentSamples(const int16_t *src, size_t nSrc, int srcRate) {
-  if (!nSrc) return;
-  if (srcRate != TALK_SAMPLE_RATE && srcRate > 0) {
-    size_t nDst =
-        (size_t)((uint64_t)nSrc * (uint64_t)TALK_SAMPLE_RATE / (uint64_t)srcRate);
-    if (!nDst) return;
-    int16_t *dst = (int16_t *)psramOrRam(nDst * sizeof(int16_t));
-    if (!dst) {
-      talkPlayRingPush(src, nSrc);
-      return;
-    }
-    for (size_t i = 0; i < nDst; i++) {
-      float pos = (float)i * (float)srcRate / (float)TALK_SAMPLE_RATE;
-      size_t i0 = (size_t)pos;
-      size_t i1 = (i0 + 1 < nSrc) ? i0 + 1 : nSrc - 1;
-      if (i0 >= nSrc) i0 = nSrc - 1;
-      float t = pos - (float)i0;
-      dst[i] = (int16_t)((1.0f - t) * (float)src[i0] + t * (float)src[i1]);
-    }
-    size_t pushed = talkPlayRingPush(dst, nDst);
-    free(dst);
-    if (pushed < nDst) {
-      playRingDrops += (uint32_t)(nDst - pushed);
-      logf("play ring drop %u\n", (unsigned)(nDst - pushed));
-    }
-    return;
+static void pushAgentPcmBytes(const uint8_t *data, size_t nbytes) {
+  if (!nbytes) return;
+  const size_t pushed = talkPlayRingPush(data, nbytes);
+  if (pushed < nbytes) {
+    // Counted in wire bytes, so the magnitude depends on the negotiated
+    // format. Only whether it moves matters: nonzero means a reply outran the
+    // ring and the agent will be heard skipping.
+    playRingDrops += (uint32_t)(nbytes - pushed);
+    logf("play ring drop %u\n", (unsigned)(nbytes - pushed));
   }
-  size_t pushed = talkPlayRingPush(src, nSrc);
-  if (pushed < nSrc) {
-    playRingDrops += (uint32_t)(nSrc - pushed);
-    logf("play ring drop %u\n", (unsigned)(nSrc - pushed));
-  }
-}
-
-static void pushAgentPcmBytes(const uint8_t *data, size_t nbytes, int srcRate) {
-  if (agentOutUlaw) {
-    // One byte per sample, so expand before anything else looks at it. Worth
-    // the extra buffer: ulaw_8000 is a quarter the bytes on the wire, which is
-    // what stops a single reply arriving as multi-hundred-KB frames.
-    if (!nbytes) return;
-    if (!ensureAgentDec(nbytes)) {
-      logf("ulaw scratch OOM %u\n", (unsigned)nbytes);
-      return;
-    }
-    talkUlawDecode(data, nbytes, agentDecBuf);
-    pushAgentSamples(agentDecBuf, nbytes, srcRate);
-    return;
-  }
-  if (nbytes < 2) return;
-  pushAgentSamples((const int16_t *)data, nbytes / 2, srcRate);
 }
 
 static int parseRate(const char *fmt) {
@@ -503,14 +448,14 @@ static void handleAudioInPlace(char *payload, size_t length) {
   // gap= is time since the previous audio frame landed and dec= is decode
   // cost, which together say whether a playback stall is network or CPU.
   const uint32_t gapMs = prevAudioMs ? (lastAgentAudioMs - prevAudioMs) : 0;
-  const size_t ringBefore = talkPlayRingUsed();
-  if (audioChunksRx <= 5 || (audioChunksRx % 25) == 0 || ringBefore == 0) {
-    logf("audio #%lu bytes=%u ring=%u gap=%lums dec=%lums under=%lu\n",
-         (unsigned long)audioChunksRx, (unsigned)outLen, (unsigned)ringBefore,
-         (unsigned long)gapMs, (unsigned long)decodeMs,
-         (unsigned long)playUnderruns);
+  const uint32_t ringBeforeMs = talkPlayRingUsedMs();
+  if (audioChunksRx <= 5 || (audioChunksRx % 25) == 0 || ringBeforeMs == 0) {
+    logf("audio #%lu bytes=%u ring=%lums gap=%lums dec=%lums under=%lu\n",
+         (unsigned long)audioChunksRx, (unsigned)outLen,
+         (unsigned long)ringBeforeMs, (unsigned long)gapMs,
+         (unsigned long)decodeMs, (unsigned long)playUnderruns);
   }
-  pushAgentPcmBytes(pcmScratch, outLen, agentOutRate);
+  pushAgentPcmBytes(pcmScratch, outLen);
 }
 
 static void copyTrunc(char *dst, size_t dstLen, const char *src) {
@@ -546,6 +491,7 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
     const char *inFmt = ev["user_input_audio_format"] | "pcm_16000";
     agentOutRate = parseRate(outFmt);
     agentOutUlaw = strstr(outFmt, "ulaw") != nullptr;
+    talkPlayRingSetFormat(agentOutRate, agentOutUlaw);
     agentInRate = parseRate(inFmt);
     agentInUlaw = strstr(inFmt, "ulaw") != nullptr && agentInRate == 8000;
     if (!agentInUlaw && agentInRate != TALK_SAMPLE_RATE) {
@@ -577,8 +523,7 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
   } else if (!strcmp(type, "interruption")) {
     // How much buffered speech this throws away is the whole question when the
     // interruption was spurious — the prime buffer means it is never zero.
-    const uint32_t lostMs =
-        (uint32_t)(talkPlayRingUsed() * 1000 / TALK_SAMPLE_RATE);
+    const uint32_t lostMs = talkPlayRingUsedMs();
     talkPlayRingClear();
     playPriming = true;
     lastAgentAudioMs = 0;
@@ -610,6 +555,7 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
     agentInRate = TALK_SAMPLE_RATE;
     agentOutUlaw = false;
     agentOutRate = TALK_SAMPLE_RATE;
+    talkPlayRingSetFormat(TALK_SAMPLE_RATE, false);
     micUplinkClear();
     talkUlawReset();
     pendingInit = true;
@@ -821,7 +767,6 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
   }
   logf("WS host=%s path_len=%u\n", signedHost, (unsigned)strlen(signedPath));
 
-  talkPlayRingClear();
   talkAudioResetDsp();
   talkAecReset();
   talkUlawReset();
@@ -830,6 +775,7 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
   agentInUlaw = false;
   agentOutUlaw = false;
   agentOutRate = TALK_SAMPLE_RATE;
+  talkPlayRingSetFormat(TALK_SAMPLE_RATE, false);
   micCapturedSamples = 0;
   micSentSamples = 0;
   micDroppedSamples = 0;
@@ -914,7 +860,7 @@ const char *talkAgentLastReply() { return lastReplyBuf; }
 
 static bool agentIsSpeaking() {
   // Any queued TTS, recent network audio, or recent non-silent DAC output.
-  if (talkPlayRingUsed() > 0) return true;
+  if (!talkPlayRingEmpty()) return true;
   const uint32_t now = millis();
   if (lastAgentAudioMs != 0 &&
       (now - lastAgentAudioMs) < TALK_AGENT_SPEAKING_TAIL_MS) {
@@ -999,12 +945,12 @@ static void talkAgentPumpAudio() {
   // continues to see exactly what the speaker emits.
   size_t have = 0;
   if (playPriming) {
-    const size_t queued = talkPlayRingUsed();
+    const uint32_t queuedMs = talkPlayRingUsedMs();
     const uint32_t lastRx = lastAgentAudioMs;
-    const bool primed = queued >= (size_t)TALK_PLAY_PRIME_SAMPLES;
+    const bool primed = queuedMs >= TALK_PLAY_PRIME_MS;
     const bool streamIdle =
         lastRx != 0 && (millis() - lastRx) >= TALK_PLAY_PRIME_FLUSH_MS;
-    if (queued > 0 && (primed || streamIdle)) playPriming = false;
+    if (!talkPlayRingEmpty() && (primed || streamIdle)) playPriming = false;
   }
   if (!playPriming) {
     have = talkPlayRingPop(playScratch, (size_t)n);
@@ -1036,8 +982,8 @@ static void talkAgentPumpAudio() {
   // starved ring from an overflowing one.
   if (now - playStatMs > 5000) {
     playStatMs = now;
-    logf("play ring=%ums under=%lu ovf=%lu wrdrop=%lu wrstall=%lu wrmax=%lums\n",
-         (unsigned)(talkPlayRingUsed() * 1000 / TALK_SAMPLE_RATE),
+    logf("play ring=%lums under=%lu ovf=%lu wrdrop=%lu wrstall=%lu wrmax=%lums\n",
+         (unsigned long)talkPlayRingUsedMs(),
          (unsigned long)playUnderruns, (unsigned long)playRingDrops,
          (unsigned long)talkAudioWriteDropped(),
          (unsigned long)talkAudioWriteStalls(),

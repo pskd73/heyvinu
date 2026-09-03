@@ -1,5 +1,6 @@
 #include "talk_audio.h"
 #include "talk_config.h"
+#include "talk_ulaw.h"
 #include "audio_volume.h"
 
 #include <Arduino.h>
@@ -43,9 +44,26 @@ static float dspPeakEma = 200000.0f;
 static float dspGain = 2.0f;
 static int userGain = 4;
 
-static int16_t *playRing = nullptr;
+static uint8_t *playRing = nullptr;
 static size_t playCap = 0, playHead = 0, playTail = 0, playUsed = 0;
 static portMUX_TYPE playMux = portMUX_INITIALIZER_UNLOCKED;
+
+// Wire format of the bytes currently in the ring.
+static int playInRate = TALK_SAMPLE_RATE;
+static size_t playInBytes = 2;
+
+/**
+ * Pop-side linear resampler. Q16 phase, so any source rate works rather than
+ * just the 2x that ulaw_8000 happens to need.
+ *
+ * prev/cur persist across pops on purpose: the old producer-side resampler
+ * clamped to the end of each chunk and so never interpolated across a chunk
+ * boundary, putting a small discontinuity at every seam.
+ */
+static uint32_t playRsStep = 1u << 16;
+static int16_t playRsPrev = 0, playRsCur = 0;
+static uint32_t playRsFrac = 0;
+static bool playRsPrimed = false;
 
 static int32_t i2sRaw[TALK_I2S_BUF_SAMPLES];
 
@@ -226,22 +244,28 @@ void talkAudioResetWriteStats() {
   playWriteMaxMs = 0;
 }
 
+static void playResetResampler() {
+  playRsPrev = playRsCur = 0;
+  playRsFrac = 0;
+  playRsPrimed = false;
+}
+
 bool talkPlayRingInit() {
   if (playRing) return true;
-  // Halve rather than fail: at 1.92 MB this block can lose to PSRAM
+  // Halve rather than fail: at ~1.9 MB this block can lose to PSRAM
   // fragmentation, and a short ring still holds a conversation — it only
   // clips long replies the way the 12 s ring did. There is no internal-RAM
   // fallback because nothing this size would ever fit there.
-  for (size_t secs = TALK_PLAY_RING_SECONDS; secs >= 8; secs /= 2) {
-    const size_t cap = (size_t)TALK_SAMPLE_RATE * secs;
-    playRing = (int16_t *)heap_caps_malloc(cap * sizeof(int16_t),
-                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  for (size_t cap = TALK_PLAY_RING_BYTES; cap >= 128u * 1024u; cap /= 2) {
+    playRing = (uint8_t *)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!playRing) continue;
     playCap = cap;
     playHead = playTail = playUsed = 0;
-    if (secs != (size_t)TALK_PLAY_RING_SECONDS) {
-      Serial.printf("Talk play ring short: %us (wanted %us)\n", (unsigned)secs,
-                    (unsigned)TALK_PLAY_RING_SECONDS);
+    playResetResampler();
+    if (cap != TALK_PLAY_RING_BYTES) {
+      Serial.printf("Talk play ring short: %uKB (wanted %uKB)\n",
+                    (unsigned)(cap / 1024),
+                    (unsigned)(TALK_PLAY_RING_BYTES / 1024));
     }
     return true;
   }
@@ -253,37 +277,127 @@ void talkPlayRingClear() {
   portENTER_CRITICAL(&playMux);
   playHead = playTail = playUsed = 0;
   portEXIT_CRITICAL(&playMux);
+  playResetResampler();
 }
 
-size_t talkPlayRingPush(const int16_t *data, size_t count) {
-  size_t pushed = 0;
+void talkPlayRingSetFormat(int srcRate, bool ulaw) {
+  if (srcRate <= 0) srcRate = TALK_SAMPLE_RATE;
+  talkPlayRingClear();
+  playInRate = srcRate;
+  playInBytes = ulaw ? 1 : 2;
+  playRsStep =
+      (uint32_t)(((uint64_t)srcRate << 16) / (uint64_t)TALK_SAMPLE_RATE);
+  if (!playRsStep) playRsStep = 1;
+}
+
+size_t talkPlayRingPush(const uint8_t *data, size_t nbytes) {
+  if (!playRing || !data || !nbytes) return 0;
+
   portENTER_CRITICAL(&playMux);
-  while (pushed < count && playUsed < playCap) {
-    playRing[playHead] = data[pushed++];
-    playHead = (playHead + 1) % playCap;
-    playUsed++;
-  }
+  const size_t head = playHead;
+  const size_t room = playCap - playUsed;
   portEXIT_CRITICAL(&playMux);
-  return pushed;
+
+  const size_t n = (nbytes < room) ? nbytes : room;
+  if (!n) return 0;
+
+  // Copied outside the lock deliberately. The consumer never reads past
+  // playUsed, so the free span belongs to this task alone, and a single agent
+  // frame runs to hundreds of KB — memcpy of that with interrupts disabled
+  // would starve I2S and the radio.
+  const size_t contig = playCap - head;
+  const size_t first = (n < contig) ? n : contig;
+  memcpy(playRing + head, data, first);
+  if (n > first) memcpy(playRing, data + first, n - first);
+
+  portENTER_CRITICAL(&playMux);
+  playHead = (head + n) % playCap;
+  playUsed += n;
+  portEXIT_CRITICAL(&playMux);
+  return n;
 }
 
 size_t talkPlayRingPop(int16_t *out, size_t maxCount) {
-  size_t popped = 0;
+  if (!playRing || !out || !maxCount) return 0;
+
   portENTER_CRITICAL(&playMux);
-  while (popped < maxCount && playUsed > 0) {
-    out[popped++] = playRing[playTail];
-    playTail = (playTail + 1) % playCap;
-    playUsed--;
-  }
+  const size_t tail = playTail;
+  const size_t avail = playUsed;
   portEXIT_CRITICAL(&playMux);
-  return popped;
+
+  size_t consumed = 0;
+  size_t produced = 0;
+
+  // Walking the snapshot unlocked is safe: only the audio task pops, and the
+  // producer only ever grows playUsed.
+  const auto nextIn = [&](int16_t *s) -> bool {
+    if (avail - consumed < playInBytes) return false;
+    const size_t i = (tail + consumed) % playCap;
+    if (playInBytes == 1) {
+      *s = talkUlawSample(playRing[i]);
+    } else {
+      const size_t j = (i + 1) % playCap;
+      *s = (int16_t)((uint16_t)playRing[i] | ((uint16_t)playRing[j] << 8));
+    }
+    consumed += playInBytes;
+    return true;
+  };
+
+  bool starved = false;
+  while (produced < maxCount && !starved) {
+    if (!playRsPrimed) {
+      if (!nextIn(&playRsCur)) break;
+      // Flat start rather than a ramp up from zero, which would click.
+      playRsPrev = playRsCur;
+      playRsFrac = 0;
+      playRsPrimed = true;
+    }
+    // 64-bit because span reaches ±65535 and frac 65535, whose product
+    // overflows int32 on a steep loud waveform.
+    const int32_t span = (int32_t)playRsCur - (int32_t)playRsPrev;
+    const int32_t lerp = (int32_t)(((int64_t)span * (int64_t)playRsFrac) >> 16);
+    out[produced++] = (int16_t)((int32_t)playRsPrev + lerp);
+    playRsFrac += playRsStep;
+    while (playRsFrac >= (1u << 16)) {
+      playRsFrac -= (1u << 16);
+      playRsPrev = playRsCur;
+      if (!nextIn(&playRsCur)) {
+        // Hold the last sample and let the caller zero-fill the rest; the pump
+        // re-primes the jitter buffer once the ring drains completely.
+        playRsCur = playRsPrev;
+        playRsFrac = 0;
+        starved = true;
+        break;
+      }
+    }
+  }
+
+  if (consumed) {
+    portENTER_CRITICAL(&playMux);
+    // Skip the commit if a clear landed mid-pop: those bytes are already gone.
+    if (playTail == tail && playUsed >= consumed) {
+      playTail = (tail + consumed) % playCap;
+      playUsed -= consumed;
+    }
+    portEXIT_CRITICAL(&playMux);
+  }
+  return produced;
 }
 
-size_t talkPlayRingUsed() {
+uint32_t talkPlayRingUsedMs() {
   portENTER_CRITICAL(&playMux);
-  size_t n = playUsed;
+  const size_t used = playUsed;
   portEXIT_CRITICAL(&playMux);
-  return n;
+  if (!playInBytes || playInRate <= 0) return 0;
+  const uint64_t samples = (uint64_t)(used / playInBytes);
+  return (uint32_t)(samples * 1000u / (uint64_t)playInRate);
+}
+
+bool talkPlayRingEmpty() {
+  portENTER_CRITICAL(&playMux);
+  const size_t used = playUsed;
+  portEXIT_CRITICAL(&playMux);
+  return used == 0;
 }
 
 bool talkAudioInit() {

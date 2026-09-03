@@ -26,7 +26,7 @@
 void talkUlawReset();
 
 /**
- * Decode μ-law to PCM16, one sample per input byte, for the DOWNLINK.
+ * Expand one μ-law wire byte to PCM16, for the DOWNLINK.
  *
  * agent_output_audio_format is a property of the agent, not of the connection:
  * the client-side tts override allowlist is model_id / voice_id /
@@ -37,10 +37,10 @@ void talkUlawReset();
  * flipped on the agent instead.
  *
  * Stateless, unlike the encoder — expanding μ-law to linear is a per-sample
- * map with no filter history. Rate conversion up to the playback rate is a
- * separate step.
+ * map with no filter history. That is what lets the play ring hold undecoded
+ * wire bytes and expand them one at a time as the DAC drains it.
  */
-size_t talkUlawDecode(const uint8_t *in, size_t nIn, int16_t *out);
+int16_t talkUlawSample(uint8_t wire);
 
 /**
  * Encode a block of 16 kHz PCM as 8 kHz μ-law, returning the bytes written.

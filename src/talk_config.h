@@ -40,11 +40,14 @@
  * speech thrown away, which is heard as the agent skipping mid-sentence.
  *
  * The ring is the only thing standing between burst delivery and real-time
- * playback, so it has to be as long as the longest reply. It lives in PSRAM at
- * 2 bytes/sample: 60 s costs 1.92 MB of the ~6.8 MB free.
+ * playback, so it has to be as long as the longest reply. A byte budget rather
+ * than a duration because it stores undecoded wire bytes, so what this buys
+ * depends on the negotiated format — 4 min of ulaw_8000, 1 min of pcm_16000.
+ *
+ * Not larger: tlsUsePsram() puts the whole mbedTLS heap in the same pool, and
+ * handshakes need contiguous blocks there, so the ring cannot have all of it.
  */
-#define TALK_PLAY_RING_SECONDS 60
-#define TALK_PLAY_RING_SAMPLES (TALK_SAMPLE_RATE * TALK_PLAY_RING_SECONDS)
+#define TALK_PLAY_RING_BYTES (1920u * 1000u)
 /**
  * Playback jitter buffer. ElevenLabs delivers TTS in bursts, and the
  * WebSockets library only hands a frame over once its last byte has arrived,
@@ -60,7 +63,6 @@
  * fill that is never coming.
  */
 #define TALK_PLAY_PRIME_MS 700
-#define TALK_PLAY_PRIME_SAMPLES (TALK_SAMPLE_RATE * TALK_PLAY_PRIME_MS / 1000)
 #define TALK_PLAY_PRIME_FLUSH_MS 250
 /**
  * The ws task can stall for seconds receiving a single ~300 KB agent-audio

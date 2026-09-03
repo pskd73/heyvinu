@@ -92,10 +92,4 @@ size_t talkUlawEncodeFrom16k(const int16_t *in, size_t nIn, uint8_t *out) {
   return produced;
 }
 
-size_t talkUlawDecode(const uint8_t *in, size_t nIn, int16_t *out) {
-  if (!in || !out) return 0;
-  for (size_t i = 0; i < nIn; i++) {
-    out[i] = ulawToLinear(in[i]);
-  }
-  return nIn;
-}
+int16_t talkUlawSample(uint8_t wire) { return ulawToLinear(wire); }
