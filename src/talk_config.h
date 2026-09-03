@@ -29,8 +29,39 @@
  */
 #define TALK_MIC_CHUNK_SAMPLES 512
 #define TALK_MIC_ULAW_CHUNK_BYTES (TALK_MIC_CHUNK_SAMPLES / 2)
-#define TALK_PLAY_RING_SECONDS 12
+/**
+ * Sized to hold an ENTIRE agent turn, not a network hiccup.
+ *
+ * ElevenLabs ships a reply as fast as the socket drains, so wall-clock time is
+ * no guide to how much audio is in flight: single observed frames reached
+ * 489 KB of base64, about 11 s of PCM in one callback, and one 40 s answer
+ * arrived inside roughly 10 s. At 12 s the ring simply could not hold a reply
+ * — a single conversation logged 741344 samples of `play ring drop`, 46 s of
+ * speech thrown away, which is heard as the agent skipping mid-sentence.
+ *
+ * The ring is the only thing standing between burst delivery and real-time
+ * playback, so it has to be as long as the longest reply. It lives in PSRAM at
+ * 2 bytes/sample: 60 s costs 1.92 MB of the ~6.8 MB free.
+ */
+#define TALK_PLAY_RING_SECONDS 60
 #define TALK_PLAY_RING_SAMPLES (TALK_SAMPLE_RATE * TALK_PLAY_RING_SECONDS)
+/**
+ * Playback jitter buffer. ElevenLabs delivers TTS in bursts, and the
+ * WebSockets library only hands a frame over once its last byte has arrived,
+ * so a ~300 KB frame yields nothing playable until it is fully received and
+ * base64-decoded. With no reservoir the pump zero-fills that window straight
+ * into the DAC, which is what the 1-2 s pauses mid-sentence were.
+ *
+ * Hold this much back at the start of a turn so the next burst gap spends
+ * buffer instead of silence. The cost is that much latency on the first word.
+ *
+ * FLUSH_MS then releases a partial buffer once nothing new has arrived for a
+ * while, so the short chunk that ends a turn is not stranded waiting for a
+ * fill that is never coming.
+ */
+#define TALK_PLAY_PRIME_MS 700
+#define TALK_PLAY_PRIME_SAMPLES (TALK_SAMPLE_RATE * TALK_PLAY_PRIME_MS / 1000)
+#define TALK_PLAY_PRIME_FLUSH_MS 250
 /**
  * The ws task can stall for seconds receiving a single ~300 KB agent-audio
  * frame, and no mic chunks go out while it does. The ring has to cover that

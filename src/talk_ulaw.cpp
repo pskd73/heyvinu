@@ -47,6 +47,20 @@ inline uint8_t linearToUlaw(int32_t pcm) {
   return (uint8_t)~(sign | (uint8_t)(exponent << 4) | (uint8_t)mantissa);
 }
 
+/**
+ * Inverse of linearToUlaw. The segment exponent shifts the mantissa back up
+ * and the same 0x84 bias comes off, so positive full scale returns 32124
+ * rather than the 32635 the encoder clips at — that asymmetry is inherent to
+ * G.711, not a rounding slip. Anchors round-trip: 0xFF -> 0, 0x80 -> +32124,
+ * 0x00 -> -32124.
+ */
+inline int16_t ulawToLinear(uint8_t wire) {
+  const uint8_t u = (uint8_t)~wire;
+  int32_t t = (int32_t)((u & 0x0F) << 3) + 0x84;
+  t <<= ((uint32_t)u & 0x70) >> 4;
+  return (int16_t)((u & 0x80) ? (0x84 - t) : (t - 0x84));
+}
+
 }  // namespace
 
 void talkUlawReset() {
@@ -76,4 +90,12 @@ size_t talkUlawEncodeFrom16k(const int16_t *in, size_t nIn, uint8_t *out) {
     out[produced++] = linearToUlaw(acc);
   }
   return produced;
+}
+
+size_t talkUlawDecode(const uint8_t *in, size_t nIn, int16_t *out) {
+  if (!in || !out) return 0;
+  for (size_t i = 0; i < nIn; i++) {
+    out[i] = ulawToLinear(in[i]);
+  }
+  return nIn;
 }

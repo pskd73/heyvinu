@@ -49,6 +49,10 @@ static portMUX_TYPE playMux = portMUX_INITIALIZER_UNLOCKED;
 
 static int32_t i2sRaw[TALK_I2S_BUF_SAMPLES];
 
+static uint32_t playWriteDropped = 0;
+static uint32_t playWriteStalls = 0;
+static uint32_t playWriteMaxMs = 0;
+
 void talkAudioResetDsp() {
   dspDcX = dspDcY = 0;
   dspHpfX = dspHpfY = 0;
@@ -180,6 +184,7 @@ bool talkAudioWritePcmTimeout(const int16_t *data, int samples,
   int left = samples;
   int off = 0;
   bool ok = true;
+  const uint32_t startMs = millis();
   while (left > 0) {
     int n = left > TALK_I2S_BUF_SAMPLES ? TALK_I2S_BUF_SAMPLES : left;
     for (int i = 0; i < n; i++) {
@@ -192,27 +197,56 @@ bool talkAudioWritePcmTimeout(const int16_t *data, int samples,
       ok = false;
       break;
     }
-    off += n;
-    left -= n;
+    // A timeout with the TX DMA full still returns ESP_OK, so the shortfall
+    // shows up here and nowhere else. Report it rather than claiming the whole
+    // block went out: the caller has already consumed these samples.
+    const int wrote = (int)(written / sizeof(int32_t));
+    off += wrote;
+    left -= wrote;
+    if (wrote < n) {
+      playWriteDropped += (uint32_t)(n - wrote);
+      playWriteStalls++;
+      ok = false;
+      break;
+    }
   }
+  const uint32_t elapsed = millis() - startMs;
+  if (elapsed > playWriteMaxMs) playWriteMaxMs = elapsed;
   i2sEndOp();
   return ok;
 }
 
+uint32_t talkAudioWriteDropped() { return playWriteDropped; }
+uint32_t talkAudioWriteStalls() { return playWriteStalls; }
+uint32_t talkAudioWriteMaxMs() { return playWriteMaxMs; }
+
+void talkAudioResetWriteStats() {
+  playWriteDropped = 0;
+  playWriteStalls = 0;
+  playWriteMaxMs = 0;
+}
+
 bool talkPlayRingInit() {
   if (playRing) return true;
-  playCap = TALK_PLAY_RING_SAMPLES;
-  size_t bytes = playCap * sizeof(int16_t);
-  playRing = (int16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (!playRing) {
-    playRing = (int16_t *)malloc(bytes);
+  // Halve rather than fail: at 1.92 MB this block can lose to PSRAM
+  // fragmentation, and a short ring still holds a conversation — it only
+  // clips long replies the way the 12 s ring did. There is no internal-RAM
+  // fallback because nothing this size would ever fit there.
+  for (size_t secs = TALK_PLAY_RING_SECONDS; secs >= 8; secs /= 2) {
+    const size_t cap = (size_t)TALK_SAMPLE_RATE * secs;
+    playRing = (int16_t *)heap_caps_malloc(cap * sizeof(int16_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!playRing) continue;
+    playCap = cap;
+    playHead = playTail = playUsed = 0;
+    if (secs != (size_t)TALK_PLAY_RING_SECONDS) {
+      Serial.printf("Talk play ring short: %us (wanted %us)\n", (unsigned)secs,
+                    (unsigned)TALK_PLAY_RING_SECONDS);
+    }
+    return true;
   }
-  if (!playRing) {
-    playCap = 0;
-    return false;
-  }
-  playHead = playTail = playUsed = 0;
-  return true;
+  playCap = 0;
+  return false;
 }
 
 void talkPlayRingClear() {

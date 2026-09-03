@@ -27,6 +27,7 @@ static volatile bool agentReady = false;
 static volatile bool wsTaskRun = false;
 static TaskHandle_t wsTaskHandle = nullptr;
 static int agentOutRate = TALK_SAMPLE_RATE;
+static bool agentOutUlaw = false;
 
 // Uplink format, taken from conversation_initiation_metadata rather than
 // chosen here — see sendInit().
@@ -51,6 +52,10 @@ static uint32_t audioChunksRx = 0;
 static uint32_t readyAtMs = 0;
 static uint32_t lastAgentAudioMs = 0;
 static uint32_t lastNonSilentPlayMs = 0;
+static volatile bool playPriming = true;
+static uint32_t playUnderruns = 0;
+static uint32_t playRingDrops = 0;
+static uint32_t playStatMs = 0;
 
 static const int kWaveBars = 24;
 static uint8_t waveBars[kWaveBars];
@@ -108,6 +113,21 @@ static bool ensurePcmScratch(size_t need) {
   if (!p) return false;
   pcmScratch = (uint8_t *)p;
   pcmScratchCap = need;
+  return true;
+}
+
+static int16_t *agentDecBuf = nullptr;
+static size_t agentDecCap = 0;
+
+static bool ensureAgentDec(size_t samples) {
+  if (agentDecCap >= samples) return true;
+  const size_t bytes = samples * sizeof(int16_t);
+  void *p = heap_caps_realloc(agentDecBuf, bytes,
+                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!p) p = realloc(agentDecBuf, bytes);
+  if (!p) return false;
+  agentDecBuf = (int16_t *)p;
+  agentDecCap = samples;
   return true;
 }
 
@@ -173,10 +193,11 @@ static void micUplinkClear() {
 
 static bool allocSessionBuffers() {
   if (!ensureTxJson(16 * 1024)) return false;
-  // Agent frames have been observed at 321 KB of base64 (~240 KB PCM).
-  // Preallocate past that so a long response does not trigger a realloc
-  // mid-stream, which only adds to the playback gap.
-  if (!ensurePcmScratch(320 * 1024)) return false;
+  // Sized off the largest frame actually seen on the wire, 489593 bytes of
+  // base64 needing ~367 KB decoded — the old 320 KB fell short and paid for a
+  // realloc mid-reply, which lands straight in the playback gap. ulaw_8000
+  // output quarters this, but the pcm_16000 path has to stay safe.
+  if (!ensurePcmScratch(512 * 1024)) return false;
   if (!micUplinkInit()) return false;
   return true;
 }
@@ -360,10 +381,8 @@ static void sendMicChunkFromUplink() {
   }
 }
 
-static void pushAgentPcmBytes(const uint8_t *data, size_t nbytes, int srcRate) {
-  if (nbytes < 2) return;
-  size_t nSrc = nbytes / 2;
-  const int16_t *src = (const int16_t *)data;
+static void pushAgentSamples(const int16_t *src, size_t nSrc, int srcRate) {
+  if (!nSrc) return;
   if (srcRate != TALK_SAMPLE_RATE && srcRate > 0) {
     size_t nDst =
         (size_t)((uint64_t)nSrc * (uint64_t)TALK_SAMPLE_RATE / (uint64_t)srcRate);
@@ -383,11 +402,35 @@ static void pushAgentPcmBytes(const uint8_t *data, size_t nbytes, int srcRate) {
     }
     size_t pushed = talkPlayRingPush(dst, nDst);
     free(dst);
-    if (pushed < nDst) logf("play ring drop %u\n", (unsigned)(nDst - pushed));
+    if (pushed < nDst) {
+      playRingDrops += (uint32_t)(nDst - pushed);
+      logf("play ring drop %u\n", (unsigned)(nDst - pushed));
+    }
     return;
   }
   size_t pushed = talkPlayRingPush(src, nSrc);
-  if (pushed < nSrc) logf("play ring drop %u\n", (unsigned)(nSrc - pushed));
+  if (pushed < nSrc) {
+    playRingDrops += (uint32_t)(nSrc - pushed);
+    logf("play ring drop %u\n", (unsigned)(nSrc - pushed));
+  }
+}
+
+static void pushAgentPcmBytes(const uint8_t *data, size_t nbytes, int srcRate) {
+  if (agentOutUlaw) {
+    // One byte per sample, so expand before anything else looks at it. Worth
+    // the extra buffer: ulaw_8000 is a quarter the bytes on the wire, which is
+    // what stops a single reply arriving as multi-hundred-KB frames.
+    if (!nbytes) return;
+    if (!ensureAgentDec(nbytes)) {
+      logf("ulaw scratch OOM %u\n", (unsigned)nbytes);
+      return;
+    }
+    talkUlawDecode(data, nbytes, agentDecBuf);
+    pushAgentSamples(agentDecBuf, nbytes, srcRate);
+    return;
+  }
+  if (nbytes < 2) return;
+  pushAgentSamples((const int16_t *)data, nbytes / 2, srcRate);
 }
 
 static int parseRate(const char *fmt) {
@@ -402,16 +445,31 @@ static int parseRate(const char *fmt) {
 }
 
 static void handleAudioInPlace(char *payload, size_t length) {
-  (void)length;
+  // Every bail-out below discards a whole chunk — up to a second of speech —
+  // so none of them may be silent. A truncated frame lands on the unterminated
+  // case, which is otherwise indistinguishable from audio that never arrived.
   char *key = strstr(payload, "audio_base_64");
-  if (!key) return;
+  if (!key) {
+    logf("audio parse: no key (len=%u)\n", (unsigned)length);
+    return;
+  }
   char *q1 = strchr(key + 13, '"');
-  if (!q1) return;
+  if (!q1) {
+    logf("audio parse: no colon quote (len=%u)\n", (unsigned)length);
+    return;
+  }
   q1 = strchr(q1 + 1, '"');
-  if (!q1) return;
+  if (!q1) {
+    logf("audio parse: no open quote (len=%u)\n", (unsigned)length);
+    return;
+  }
   q1++;
   char *q2 = strchr(q1, '"');
-  if (!q2) return;
+  if (!q2) {
+    logf("audio parse: unterminated b64, frame truncated? (len=%u)\n",
+         (unsigned)length);
+    return;
+  }
 
   size_t b64Len = (size_t)(q2 - q1);
   char saved = *q2;
@@ -443,9 +501,10 @@ static void handleAudioInPlace(char *payload, size_t length) {
   const uint32_t gapMs = prevAudioMs ? (lastAgentAudioMs - prevAudioMs) : 0;
   const size_t ringBefore = talkPlayRingUsed();
   if (audioChunksRx <= 5 || (audioChunksRx % 25) == 0 || ringBefore == 0) {
-    logf("audio #%lu bytes=%u ring=%u gap=%lums dec=%lums\n",
+    logf("audio #%lu bytes=%u ring=%u gap=%lums dec=%lums under=%lu\n",
          (unsigned long)audioChunksRx, (unsigned)outLen, (unsigned)ringBefore,
-         (unsigned long)gapMs, (unsigned long)decodeMs);
+         (unsigned long)gapMs, (unsigned long)decodeMs,
+         (unsigned long)playUnderruns);
   }
   pushAgentPcmBytes(pcmScratch, outLen, agentOutRate);
 }
@@ -482,6 +541,7 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
     const char *outFmt = ev["agent_output_audio_format"] | "pcm_16000";
     const char *inFmt = ev["user_input_audio_format"] | "pcm_16000";
     agentOutRate = parseRate(outFmt);
+    agentOutUlaw = strstr(outFmt, "ulaw") != nullptr;
     agentInRate = parseRate(inFmt);
     agentInUlaw = strstr(inFmt, "ulaw") != nullptr && agentInRate == 8000;
     if (!agentInUlaw && agentInRate != TALK_SAMPLE_RATE) {
@@ -494,8 +554,9 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
     agentReady = true;
     readyAtMs = millis();
     setStatus("Listening");
-    logf("agent ready out=%s rate=%d / uplink %s -> %s %dHz\n", outFmt,
-         agentOutRate, inFmt, agentInUlaw ? "ulaw" : "pcm16", agentInRate);
+    logf("agent ready out=%s -> %s %dHz / uplink %s -> %s %dHz\n", outFmt,
+         agentOutUlaw ? "ulaw" : "pcm16", agentOutRate, inFmt,
+         agentInUlaw ? "ulaw" : "pcm16", agentInRate);
     logMem("ready");
   } else if (!strcmp(type, "ping")) {
     pendingPongId = doc["ping_event"]["event_id"] | 0;
@@ -510,11 +571,16 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
     setStatus("Speaking");
     logf("agent: %s\n", t);
   } else if (!strcmp(type, "interruption")) {
+    // How much buffered speech this throws away is the whole question when the
+    // interruption was spurious — the prime buffer means it is never zero.
+    const uint32_t lostMs =
+        (uint32_t)(talkPlayRingUsed() * 1000 / TALK_SAMPLE_RATE);
     talkPlayRingClear();
+    playPriming = true;
     lastAgentAudioMs = 0;
     lastNonSilentPlayMs = 0;
     setStatus("Listening");
-    logf("(interrupted)\n");
+    logf("(interrupted) discarded=%lums\n", (unsigned long)lostMs);
   } else if (!strcmp(type, "error")) {
     setStatus("Error");
     logf("EL error: %.160s\n", msg);
@@ -531,8 +597,15 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
     agentReady = false;
     audioChunksRx = 0;
     lastNonSilentPlayMs = 0;
+    playPriming = true;
+    playUnderruns = 0;
+    playRingDrops = 0;
+    playStatMs = 0;
+    talkAudioResetWriteStats();
     agentInUlaw = false;
     agentInRate = TALK_SAMPLE_RATE;
+    agentOutUlaw = false;
+    agentOutRate = TALK_SAMPLE_RATE;
     micUplinkClear();
     talkUlawReset();
     pendingInit = true;
@@ -666,6 +739,8 @@ bool talkAgentStart(AppHost *host) {
   micUplinkClear();
   agentInRate = TALK_SAMPLE_RATE;
   agentInUlaw = false;
+  agentOutUlaw = false;
+  agentOutRate = TALK_SAMPLE_RATE;
   micCapturedSamples = 0;
   micSentSamples = 0;
   micDroppedSamples = 0;
@@ -675,6 +750,11 @@ bool talkAgentStart(AppHost *host) {
   pendingPong = false;
   lastAgentAudioMs = 0;
   lastNonSilentPlayMs = 0;
+  playPriming = true;
+  playUnderruns = 0;
+  playRingDrops = 0;
+  playStatMs = 0;
+  talkAudioResetWriteStats();
   lastSendOkMs = 0;
   lastSlowSendLogMs = 0;
   playLevelEma = 0;
@@ -802,7 +882,27 @@ static void talkAgentPumpAudio() {
     return;
   }
 
-  size_t have = talkPlayRingPop(playScratch, (size_t)n);
+  // While priming, playScratch stays silent and the ring keeps filling. The
+  // silence still goes to I2S and to the AEC reference, so the echo estimate
+  // continues to see exactly what the speaker emits.
+  size_t have = 0;
+  if (playPriming) {
+    const size_t queued = talkPlayRingUsed();
+    const uint32_t lastRx = lastAgentAudioMs;
+    const bool primed = queued >= (size_t)TALK_PLAY_PRIME_SAMPLES;
+    const bool streamIdle =
+        lastRx != 0 && (millis() - lastRx) >= TALK_PLAY_PRIME_FLUSH_MS;
+    if (queued > 0 && (primed || streamIdle)) playPriming = false;
+  }
+  if (!playPriming) {
+    have = talkPlayRingPop(playScratch, (size_t)n);
+    // Drained: either the turn ended or delivery fell behind. Re-arm so the
+    // next burst refills before it reaches the DAC.
+    if (have == 0) {
+      playPriming = true;
+      playUnderruns++;
+    }
+  }
   if (have < (size_t)n) {
     memset(playScratch + have, 0, ((size_t)n - have) * sizeof(int16_t));
   }
@@ -817,6 +917,20 @@ static void talkAgentPumpAudio() {
   }
 
   if (!agentReady) return;
+
+  // Playback health, from the audio task. wrdrop is the decisive field: those
+  // samples were popped off the ring and then never reached the DAC, so they
+  // are a hole in the audio that no other counter sees. under/ovf separate a
+  // starved ring from an overflowing one.
+  if (now - playStatMs > 5000) {
+    playStatMs = now;
+    logf("play ring=%ums under=%lu ovf=%lu wrdrop=%lu wrstall=%lu wrmax=%lums\n",
+         (unsigned)(talkPlayRingUsed() * 1000 / TALK_SAMPLE_RATE),
+         (unsigned long)playUnderruns, (unsigned long)playRingDrops,
+         (unsigned long)talkAudioWriteDropped(),
+         (unsigned long)talkAudioWriteStalls(),
+         (unsigned long)talkAudioWriteMaxMs());
+  }
 
   if (agentIsSpeaking()) {
     if (strcmp(statusBuf, "Listening") == 0) {

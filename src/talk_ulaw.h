@@ -26,6 +26,23 @@
 void talkUlawReset();
 
 /**
+ * Decode μ-law to PCM16, one sample per input byte, for the DOWNLINK.
+ *
+ * agent_output_audio_format is a property of the agent, not of the connection:
+ * the client-side tts override allowlist is model_id / voice_id /
+ * supported_voices / stability / speed / similarity_boost /
+ * pronunciation_dictionary_locators, so asking for ulaw_8000 over the socket
+ * earns an override_error and a 1008 close. This exists so the firmware can
+ * play whatever conversation_initiation_metadata reports, and the format is
+ * flipped on the agent instead.
+ *
+ * Stateless, unlike the encoder — expanding μ-law to linear is a per-sample
+ * map with no filter history. Rate conversion up to the playback rate is a
+ * separate step.
+ */
+size_t talkUlawDecode(const uint8_t *in, size_t nIn, int16_t *out);
+
+/**
  * Encode a block of 16 kHz PCM as 8 kHz μ-law, returning the bytes written.
  *
  * Consumes nIn samples and produces nIn / 2 bytes, so out needs that much
