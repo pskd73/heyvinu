@@ -41,6 +41,13 @@ public:
   bool goBack() override;
   bool handleKey(UIEvent &e) override;
 
+  /**
+   * Hold off the idle screensaver for the whole talk page, not just a live
+   * session: a failed call leaves an error here that the user still needs to
+   * read.
+   */
+  bool allowsIdle() const override { return pageId() != kPageTalk; }
+
 protected:
   const char *nvsNamespace() const override { return "ask"; }
 

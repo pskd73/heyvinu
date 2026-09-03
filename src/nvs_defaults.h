@@ -4,7 +4,6 @@
 #include <Preferences.h>
 
 #include "audio_volume.h"
-#include "eyes_app.h"
 #include "launcher_app.h"
 #include "settings_app.h"
 #include "test_app.h"
@@ -46,7 +45,6 @@ inline bool loadNvsBlob(const char *ns, S *out) {
 inline void ensureNvsDefaults() {
   ensureNvsBlob("settings", SettingsState{});
   ensureNvsBlob("launch", LauncherState{});
-  ensureNvsBlob("eyes", EyesState{});
   ensureNvsBlob("test", TestState{});
   ensureNvsBlob("ask", AskState{});
   ensureNvsBlob("remote", RemoteState{});
