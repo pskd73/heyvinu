@@ -72,7 +72,9 @@ inline DisplayPanel Panel169() {
   p.gramWidth = 240;
   p.gramHeight = 280; // visible area — Adafruit centers in 320-row GRAM
   p.panelYOffset = 0;
-  p.spiHz = 80000000;
+  // 80 MHz is above the ST7789 rated write clock and glitches when the speaker
+  // amp and Wi-Fi radio are both loaded.
+  p.spiHz = 40000000;
   p.uiScale = 1.0f;
   p.pinMosi = 41;
   p.pinSclk = 42;

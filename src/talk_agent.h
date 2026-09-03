@@ -31,6 +31,24 @@ bool talkAgentIsSpeaking();
 float talkAgentPlayLevel();
 int talkAgentWaveBars(uint8_t *out, int maxBars);
 
+/**
+ * Transport health of a live session, for an at-a-glance indicator.
+ *
+ * Derived from timers rather than events: every setStatus() string is written
+ * at a state transition, so a wedged uplink leaves the status reading
+ * "Listening" right up until the socket dies. Lifecycle (never started vs.
+ * dropped) stays with the caller, which already tracks it.
+ */
+enum class TalkHealth : uint8_t {
+  Offline,    // no session running
+  Connecting, // socket up, format metadata not exchanged yet
+  Ok,
+  Degraded, // uplink slipping behind
+  Stuck,    // uplink wedged; the session dies if this holds
+};
+
+TalkHealth talkAgentHealth();
+
 const char *talkAgentStatus();
 const char *talkAgentLastUser();
 const char *talkAgentLastReply();

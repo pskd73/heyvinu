@@ -885,6 +885,29 @@ void talkAgentStop() {
 
 bool talkAgentIsActive() { return agentActive; }
 bool talkAgentIsReady() { return agentReady; }
+TalkHealth talkAgentHealth() {
+  if (!agentActive) return TalkHealth::Offline;
+  if (!agentReady) return TalkHealth::Connecting;
+
+  // The uplink is the canary. A healthy send lands every ~32 ms, the slow-send
+  // log already fires at 250 ms, and a write that never completes is what
+  // finally kills the socket at WEBSOCKETS_TCP_TIMEOUT. Flagging Stuck well
+  // short of that turns a silent 5 s death into visible warning.
+  static constexpr uint32_t kDegradedMs = 400;
+  static constexpr uint32_t kStuckMs = 1500;
+  // Backlog idles at a chunk or two, so half a second means the drain is
+  // losing rather than jittering.
+  static constexpr size_t kBacklogDegraded = TALK_SAMPLE_RATE / 2;
+
+  if (lastSendOkMs) {
+    const uint32_t since = millis() - lastSendOkMs;
+    if (since >= kStuckMs) return TalkHealth::Stuck;
+    if (since >= kDegradedMs) return TalkHealth::Degraded;
+  }
+  if (micUplinkUsed() >= kBacklogDegraded) return TalkHealth::Degraded;
+  return TalkHealth::Ok;
+}
+
 const char *talkAgentStatus() { return statusBuf; }
 const char *talkAgentLastUser() { return lastUserBuf; }
 const char *talkAgentLastReply() { return lastReplyBuf; }

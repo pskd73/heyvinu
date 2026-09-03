@@ -131,18 +131,6 @@ void AskApp::onStatusTick(UINode &node, float dt) {
   self->page().invalidateContent();
 }
 
-void AskApp::onRetryPress(UIButton &btn) {
-  (void)btn;
-  AskApp *self = self_;
-  if (!self || self->pendingFetch_) {
-    return;
-  }
-  snprintf(self->statusLine_, sizeof(self->statusLine_), "Loading agents...");
-  self->pendingFetch_ = true;
-  self->warmupFrames_ = 1;
-  self->page().invalidateContent();
-}
-
 void AskApp::onAgentSelect(UISelect &sel) {
   if (!self_) {
     return;
@@ -169,14 +157,7 @@ void AskApp::buildStatus(Page &page) {
                                    .setWidth(Length::Pct(100))
                                    .setFont(FontRole::Small)
                                    .setColor(muted)
-                                   .setAlign(Align::Center)))
-               .add(page.button()
-                        .color(ButtonColor::Secondary)
-                        .variant(ButtonVariant::Soft)
-                        .icon("refresh-cw")
-                        .onPress(onRetryPress)
-                        .add(page.text("Retry").style(
-                            Style().setFont(FontRole::Small)))));
+                                   .setAlign(Align::Center))));
 }
 
 void AskApp::buildAgents(Page &page) {
@@ -195,15 +176,11 @@ void AskApp::buildAgents(Page &page) {
                  .value((int16_t)i));
   }
 
-  // Centered while the list is short; axisAlign yields nothing once the rows
-  // outgrow the viewport, so a full list still starts at the top and scrolls.
   auto &col = page.div().style(Style()
                                    .setWidth(Length::Pct(100))
-                                   .setHeight(Length::Pct(100))
                                    .setPadding(Edges(16, 12))
                                    .setGap(10)
-                                   .setColumns(1)
-                                   .setAlignV(Align::Center));
+                                   .setColumns(1));
   col.add(list);
   if (moreLine_[0]) {
     col.add(page.text(moreLine_)
@@ -270,6 +247,26 @@ bool AskApp::adjustVolume(int16_t delta) {
   return true;
 }
 
+uint16_t AskApp::healthColor() const {
+  const Theme::ThemeTokens &th = Theme::active();
+  if (failed_) return th.error;
+  if (pendingStart_ || !started_) {
+    return Theme::lerp(th.baseContent, th.base100, 0.4f);
+  }
+  switch (talkAgentHealth()) {
+  case TalkHealth::Ok:
+    return th.success;
+  case TalkHealth::Degraded:
+    return th.warning;
+  case TalkHealth::Connecting:
+    return th.info;
+  case TalkHealth::Stuck:
+  case TalkHealth::Offline:
+  default:
+    return th.error;
+  }
+}
+
 void AskApp::formatTalkStatus() {
   if (failed_) {
     snprintf(talkLine_, sizeof(talkLine_), "%s",
@@ -321,24 +318,27 @@ void AskApp::onTalkTick(UINode &node, float dt) {
   memcpy(prev, self->talkLine_, sizeof(prev));
   self->formatTalkStatus();
 
-  if (strcmp(prev, self->talkLine_) == 0 && !self->volumeDirty_) {
-    return;
-  }
+  const uint16_t color = self->healthColor();
+  const bool healthChanged = color != self->healthColor_;
+  const bool textChanged = strcmp(prev, self->talkLine_) != 0;
 
-  // Avoid full-page SPI presents while TTS is playing (PSRAM bus fight).
-  if (talkAgentIsSpeaking()) {
+  if (!textChanged && !self->volumeDirty_ && !healthChanged) {
     return;
   }
 
   self->lastUiMs_ = now;
   self->volumeDirty_ = false;
+  self->healthColor_ = color;
 
   UIDiv &div = static_cast<UIDiv &>(node);
-  if (div.childCount() >= 2 && div.child(1)) {
-    static_cast<UIText *>(div.child(1))->setText(self->talkLine_);
+  if (div.childCount() > kTalkDot && div.child(kTalkDot)) {
+    div.child(kTalkDot)->style().setBackground(color);
   }
-  if (div.childCount() >= 3 && div.child(2)) {
-    static_cast<UIText *>(div.child(2))->setText(self->volumeLine_);
+  if (div.childCount() > kTalkStatus && div.child(kTalkStatus)) {
+    static_cast<UIText *>(div.child(kTalkStatus))->setText(self->talkLine_);
+  }
+  if (div.childCount() > kTalkVolume && div.child(kTalkVolume)) {
+    static_cast<UIText *>(div.child(kTalkVolume))->setText(self->volumeLine_);
   }
 
   self->page().invalidateContent();
@@ -347,6 +347,8 @@ void AskApp::onTalkTick(UINode &node, float dt) {
 void AskApp::buildTalk(Page &page) {
   const Theme::ThemeTokens &th = Theme::active();
   const uint16_t muted = Theme::lerp(th.baseContent, th.base100, 0.4f);
+  // Baked into the dot below, so the tick has the right baseline to diff.
+  healthColor_ = healthColor();
 
   page.add(page.div()
                .onTick(onTalkTick)
@@ -358,6 +360,11 @@ void AskApp::buildTalk(Page &page) {
                           .setColumns(1)
                           .setAlignH(Align::Center)
                           .setAlignV(Align::Center))
+               .add(page.div().style(Style()
+                                         .setWidth(Length::Px(10))
+                                         .setHeight(Length::Px(10))
+                                         .setRadius(5)
+                                         .setBackground(healthColor_)))
                .add(page.text(talkTitle_)
                         .style(Style()
                                    .setWidth(Length::Pct(100))

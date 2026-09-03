@@ -75,18 +75,24 @@ private:
   void buildStatus(Page &page);
   void buildAgents(Page &page);
   static void onStatusTick(UINode &node, float dt);
-  static void onRetryPress(UIButton &btn);
   static void onAgentSelect(UISelect &sel);
 
   // --- Live conversation ---
   /** Matches the Settings volume slider step. */
   static constexpr int16_t kVolumeStep = 5;
 
+  /** Child order of the talk page, mutated in place from the tick. */
+  static constexpr uint8_t kTalkDot = 0;
+  static constexpr uint8_t kTalkTitle = 1;
+  static constexpr uint8_t kTalkStatus = 2;
+  static constexpr uint8_t kTalkVolume = 3;
+
   char talkTitle_[40] = {};
   char talkLine_[48] = "Connecting...";
   char volumeLine_[24] = {};
   char agentId_[48] = {};
   bool volumeDirty_ = false;
+  uint16_t healthColor_ = 0;
   bool pendingStart_ = false;
   bool started_ = false;
   bool failed_ = false;
@@ -99,6 +105,7 @@ private:
   void formatTalkStatus();
   void formatVolumeLine();
   bool adjustVolume(int16_t delta);
+  uint16_t healthColor() const;
   void buildTalk(Page &page);
   static void onTalkTick(UINode &node, float dt);
 };
