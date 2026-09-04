@@ -19,6 +19,13 @@ struct OrImageRequest {
   /** OpenRouter model slug; null → built-in default. */
   const char *model = nullptr;
   Storage *storage = nullptr;
+  /**
+   * Optional full-image path whose `.preview.jpg` sidecar is sent as
+   * input_references. Null → use current preview / last generated image.
+   */
+  const char *referencePath = nullptr;
+  /** When true (default), attach a reference if a sidecar is available. */
+  bool attachReference = true;
 };
 
 struct OrImageResult {
@@ -42,4 +49,8 @@ bool orImageTakeResult(OrImageResult *out);
 const char *orImageStatus();
 uint32_t orImageStatusGen();
 
+/**
+ * Force-clear busy/pending state. In-flight work is invalidated (epoch bump);
+ * a zombie task may finish later and is ignored. Call on Talk stop/start.
+ */
 void orImageReset();

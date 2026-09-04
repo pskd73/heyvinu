@@ -96,6 +96,8 @@ private:
   static constexpr int16_t kVolumeBarW = 10;
   static constexpr int16_t kVolumeBarH = 14;
   static constexpr int16_t kVolumeBarGap = 4;
+  static constexpr int16_t kVolumeIcon = 16;
+  static constexpr int16_t kVolumeIconGap = 8;
   /** Images generated during the current talk session (SD paths). */
   static constexpr int kMaxSessionImages = 16;
   static constexpr int16_t kPreviewW = 280;
@@ -104,6 +106,7 @@ private:
   /** Child order of the default talk page (not used in fullscreen image). */
   static constexpr uint8_t kTalkStatus = 0;
   static constexpr uint8_t kTalkTool = 1;
+  /** Volume chrome: speaker icon + bar row. */
   static constexpr uint8_t kTalkVolume = 2;
   /** Optional gallery badge is appended after volume when count > 0. */
 
@@ -121,6 +124,12 @@ private:
   uint32_t previewGen_ = 0;
   /** Fullscreen generated-image overlay; Back dismisses to talk UI. */
   bool showingImage_ = false;
+  /**
+   * Auto-dismiss preview after this idle (ms). Reset on key while viewing;
+   * also dismissed immediately when `show_text` updates.
+   */
+  static constexpr uint32_t kImagePreviewIdleMs = 10000;
+  uint32_t imageIdleSinceMs_ = 0;
   /** True while SD→RGB565 decode is pending (show Loading… first). */
   bool imageLoading_ = false;
   /** >=0 → load this gallery index on the next talk tick. */
@@ -139,6 +148,7 @@ private:
   void resetTalkState();
   void leaveTalk();
   void dismissImage();
+  void noteImageInteraction();
   void clearSessionImages();
   void rememberSessionImage(const char *absPath);
   void formatGalleryBadge();

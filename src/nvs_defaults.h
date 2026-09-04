@@ -50,15 +50,44 @@ inline void ensureNvsDefaults() {
   ensureNvsBlob("remote", RemoteState{});
 
   SettingsState settings{};
-  const bool ok =
-      loadNvsBlob("settings", &settings) &&
-      settings.magic == SettingsState::kMagic &&
-      settings.version == SettingsState::kVersion && settings.theme >= 0 &&
-      settings.theme <= 1 &&
-      settings.volume >= ChitramAudio::kVolumeMin &&
-      settings.volume <= ChitramAudio::kVolumeMax;
+  bool upgraded = false;
+  bool ok = false;
+  {
+    Preferences prefs;
+    if (prefs.begin("settings", /*readOnly=*/true) && prefs.isKey("state")) {
+      const size_t len = prefs.getBytesLength("state");
+      if (len == sizeof(SettingsState)) {
+        ok = prefs.getBytes("state", &settings, sizeof(settings)) ==
+                 sizeof(settings) &&
+             settings.magic == SettingsState::kMagic &&
+             settings.version == SettingsState::kVersion &&
+             settings.theme >= 0 && settings.theme <= 1 &&
+             settings.volume >= ChitramAudio::kVolumeMin &&
+             settings.volume <= ChitramAudio::kVolumeMax &&
+             (settings.visualise == 0 || settings.visualise == 1);
+      } else if (len == sizeof(SettingsStateV2)) {
+        SettingsStateV2 v2{};
+        if (prefs.getBytes("state", &v2, sizeof(v2)) == sizeof(v2) &&
+            v2.magic == SettingsState::kMagic && v2.version == 2 &&
+            v2.theme >= 0 && v2.theme <= 1 &&
+            v2.volume >= ChitramAudio::kVolumeMin &&
+            v2.volume <= ChitramAudio::kVolumeMax) {
+          settings = SettingsState{};
+          settings.theme = v2.theme;
+          settings.volume = v2.volume;
+          settings.visualise = 1;
+          ok = true;
+          upgraded = true;
+        }
+      }
+    }
+    prefs.end();
+  }
   if (!ok) {
     settings = SettingsState{};
+    upgraded = true;
+  }
+  if (upgraded) {
     Preferences prefs;
     if (prefs.begin("settings", /*readOnly=*/false)) {
       prefs.putBytes("state", &settings, sizeof(settings));
@@ -69,4 +98,5 @@ inline void ensureNvsDefaults() {
   Theme::setActive(settings.theme == 1 ? Theme::WinterTheme()
                                        : Theme::FlowTheme());
   ChitramAudio::setVolumePercent(settings.volume);
+  settingsCacheVisualise(settings.visualise != 0);
 }

@@ -29,6 +29,12 @@ portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t task_ = nullptr;
 volatile bool busy_ = false;
 volatile bool resultReady_ = false;
+/** Bumped on reset/start so a late finish() from a zombie task is ignored. */
+volatile uint32_t jobEpoch_ = 0;
+uint32_t runningEpoch_ = 0;
+uint32_t jobStartedMs_ = 0;
+/** Wall-clock budget before start() force-reclaims a stuck job. */
+constexpr uint32_t kJobStuckMs = 200000;
 
 OrImageResult result_{};
 char status_[96] = "Idle";
@@ -37,6 +43,11 @@ uint32_t statusGen_ = 0;
 char apiKey_[160] = {};
 char prompt_[384] = {};
 char model_[80] = {};
+/** Optional explicit reference (full image path); empty → auto. */
+char refReqPath_[96] = {};
+/** Last successful full-image path (for next edit). */
+char lastImagePath_[96] = {};
+bool attachReference_ = true;
 Storage *storage_ = nullptr;
 
 void *psramOrRam(size_t n) {
@@ -99,7 +110,88 @@ bool jsonEscapeAppend(char *dst, size_t cap, size_t *at, const char *src) {
   return true;
 }
 
-bool buildRequestBody(char *dst, size_t cap) {
+bool appendFileBase64(char *dst, size_t cap, size_t *at, Storage *st,
+                       const char *path) {
+  if (!st || !path || !path[0] || !at) return false;
+  File f = st->open(path, FILE_READ);
+  if (!f) {
+    Serial.printf("[or-image] ref open fail %s\n", path);
+    return false;
+  }
+  const size_t fileSize = f.size();
+  if (fileSize < 32 || fileSize > 200000) {
+    Serial.printf("[or-image] ref size bad %u\n", (unsigned)fileSize);
+    f.close();
+    return false;
+  }
+  uint8_t *raw = (uint8_t *)psramOrRam(fileSize);
+  if (!raw) {
+    f.close();
+    return false;
+  }
+  const size_t got = f.read(raw, fileSize);
+  f.close();
+  if (got != fileSize) {
+    heap_caps_free(raw);
+    return false;
+  }
+
+  size_t need = 0;
+  mbedtls_base64_encode(nullptr, 0, &need, raw, fileSize);
+  if (*at + need >= cap) {
+    heap_caps_free(raw);
+    return false;
+  }
+  size_t written = 0;
+  const int rc =
+      mbedtls_base64_encode((unsigned char *)(dst + *at), cap - *at, &written,
+                            raw, fileSize);
+  heap_caps_free(raw);
+  if (rc != 0 || written == 0) return false;
+  *at += written;
+  dst[*at] = '\0';
+  return true;
+}
+
+bool resolveReferenceSidecar(char *out, size_t outLen) {
+  if (!out || outLen < 8 || !storage_ || !storage_->ready()) return false;
+  out[0] = '\0';
+  if (!attachReference_) return false;
+
+  const char *src = nullptr;
+  if (refReqPath_[0]) {
+    src = refReqPath_;
+  } else if (imagePreviewPath() && imagePreviewPath()[0]) {
+    src = imagePreviewPath();
+  } else if (lastImagePath_[0]) {
+    src = lastImagePath_;
+  }
+  if (!src || !src[0]) return false;
+
+  if (!imagePreviewSidecarPath(out, outLen, src)) return false;
+
+  if (storage_->exists(out)) return true;
+
+  // Sidecar may still be encoding from the previous preview load.
+  const uint32_t t0 = millis();
+  while (!storage_->exists(out) && millis() - t0 < 4000) {
+    delay(50);
+  }
+  if (storage_->exists(out)) return true;
+
+  // Last chance: current pixels are that image — encode sync on this task.
+  if (imagePreviewPath() && strcmp(imagePreviewPath(), src) == 0) {
+    if (imagePreviewEnsureSidecar(storage_) && storage_->exists(out)) {
+      return true;
+    }
+  }
+
+  Serial.printf("[or-image] no sidecar for ref %s\n", src);
+  out[0] = '\0';
+  return false;
+}
+
+bool buildRequestBody(char *dst, size_t cap, const char *refSidecar) {
   size_t at = 0;
   auto lit = [&](const char *s) -> bool {
     const size_t n = strlen(s);
@@ -125,21 +217,29 @@ bool buildRequestBody(char *dst, size_t cap) {
 
   if (river) {
     if (!lit("\",\"aspect_ratio\":\"4:3\",\"resolution\":\"1K\","
-             "\"output_format\":\"jpeg\",\"n\":1}"))
+             "\"output_format\":\"jpeg\""))
       return false;
   } else if (flux2) {
-    if (!lit("\",\"aspect_ratio\":\"4:3\",\"output_format\":\"jpeg\",\"n\":1}"))
+    if (!lit("\",\"aspect_ratio\":\"4:3\",\"output_format\":\"jpeg\""))
       return false;
   } else if (is25) {
-    if (!lit("\",\"aspect_ratio\":\"4:3\",\"n\":1}")) return false;
+    if (!lit("\",\"aspect_ratio\":\"4:3\"")) return false;
   } else if (isLite) {
-    if (!lit("\",\"aspect_ratio\":\"4:3\",\"resolution\":\"1K\",\"n\":1}"))
-      return false;
+    if (!lit("\",\"aspect_ratio\":\"4:3\",\"resolution\":\"1K\"")) return false;
   } else {
     // Gemini 3.1 flash-image — PNG; 512 is the smallest advertised tier.
-    if (!lit("\",\"aspect_ratio\":\"4:3\",\"resolution\":\"512\",\"n\":1}"))
-      return false;
+    if (!lit("\",\"aspect_ratio\":\"4:3\",\"resolution\":\"512\"")) return false;
   }
+
+  if (refSidecar && refSidecar[0]) {
+    if (!lit(",\"input_references\":[{\"type\":\"image_url\",\"image_url\":{"
+             "\"url\":\"data:image/jpeg;base64,"))
+      return false;
+    if (!appendFileBase64(dst, cap, &at, storage_, refSidecar)) return false;
+    if (!lit("\"}}]")) return false;
+  }
+
+  if (!lit(",\"n\":1}")) return false;
   return true;
 }
 
@@ -393,18 +493,28 @@ bool streamB64JsonToFile(HTTPClient &http, Storage *st, char *absPathOut,
 }
 
 void finish(bool ok, const char *path, const char *error) {
+  bool publish = false;
   portENTER_CRITICAL(&mux_);
-  result_ = OrImageResult{};
-  result_.ok = ok;
-  if (path) {
-    strncpy(result_.path, path, sizeof(result_.path) - 1);
+  if (runningEpoch_ == jobEpoch_) {
+    result_ = OrImageResult{};
+    result_.ok = ok;
+    if (path) {
+      strncpy(result_.path, path, sizeof(result_.path) - 1);
+    }
+    if (error) {
+      strncpy(result_.error, error, sizeof(result_.error) - 1);
+    }
+    resultReady_ = true;
+    busy_ = false;
+    publish = true;
   }
-  if (error) {
-    strncpy(result_.error, error, sizeof(result_.error) - 1);
-  }
-  resultReady_ = true;
-  busy_ = false;
+  // Stale job after orImageReset(): do not publish or touch busy_ (may belong
+  // to a newer start).
   portEXIT_CRITICAL(&mux_);
+  if (!publish) {
+    Serial.printf("[or-image] stale finish ignored ok=%d\n", ok ? 1 : 0);
+    return;
+  }
   if (ok) {
     char s[96];
     snprintf(s, sizeof(s), "Saved %s", path ? path : "");
@@ -416,7 +526,18 @@ void finish(bool ok, const char *path, const char *error) {
   }
 }
 
+bool jobIsStale() {
+  portENTER_CRITICAL(&mux_);
+  const bool stale = (runningEpoch_ != jobEpoch_);
+  portEXIT_CRITICAL(&mux_);
+  return stale;
+}
+
 void runJob() {
+  if (jobIsStale()) {
+    finish(false, nullptr, "cancelled");
+    return;
+  }
   setStatus("Generating image…");
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -432,16 +553,35 @@ void runJob() {
     return;
   }
 
-  char *body = (char *)psramOrRam(1024);
+  char refSide[96] = {};
+  const bool haveRef = resolveReferenceSidecar(refSide, sizeof(refSide));
+  if (haveRef) {
+    Serial.printf("[or-image] attaching ref %s\n", refSide);
+    setStatus("Generating (with ref)…");
+  }
+
+  size_t bodyCap = 2048;
+  if (haveRef) {
+    File rf = storage_->open(refSide, FILE_READ);
+    if (rf) {
+      bodyCap += (rf.size() * 4) / 3 + 128;
+      rf.close();
+    } else {
+      bodyCap += 65536;
+    }
+  }
+  char *body = (char *)psramOrRam(bodyCap);
   if (!body) {
     finish(false, nullptr, "OOM body");
     return;
   }
-  if (!buildRequestBody(body, 1024)) {
+  if (!buildRequestBody(body, bodyCap, haveRef ? refSide : nullptr)) {
     free(body);
-    finish(false, nullptr, "prompt too long");
+    finish(false, nullptr, haveRef ? "ref/body build fail" : "prompt too long");
     return;
   }
+  Serial.printf("[or-image] body %u bytes (ref=%d)\n", (unsigned)strlen(body),
+                haveRef ? 1 : 0);
 
   // Talk's TLS WS often starves lwIP DNS. Pre-resolve, then POST with retries.
   IPAddress orIp;
@@ -460,6 +600,11 @@ void runJob() {
     return;
   }
   Serial.printf("[or-image] DNS openrouter.ai → %s\n", orIp.toString().c_str());
+
+  if (jobIsStale()) {
+    finish(false, nullptr, "cancelled");
+    return;
+  }
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -547,18 +692,48 @@ void runJob() {
 
   if (!imagePreviewLoad(storage_, absPath, kPreviewW, kPreviewH)) {
     Serial.printf("[or-image] saved but preview decode failed\n");
+  } else {
+    // Sync sidecar on this task so the next edit can attach immediately.
+    (void)imagePreviewEnsureSidecar(storage_);
   }
+  strncpy(lastImagePath_, absPath, sizeof(lastImagePath_) - 1);
+  lastImagePath_[sizeof(lastImagePath_) - 1] = '\0';
   finish(true, absPath, nullptr);
 }
 
 void imageTask(void *arg) {
   (void)arg;
   runJob();
+  portENTER_CRITICAL(&mux_);
+  // Only clear the handle if we are still the active task slot.
   task_ = nullptr;
+  // If reset cleared busy_ already, leave it; if we were cancelled mid-flight
+  // without finish publishing, ensure busy cannot stick.
+  if (runningEpoch_ != jobEpoch_) {
+    busy_ = false;
+  }
+  portEXIT_CRITICAL(&mux_);
   vTaskDelete(nullptr);
 }
 
 } // namespace
+
+static void reclaimIfStuck() {
+  portENTER_CRITICAL(&mux_);
+  const bool stuck =
+      busy_ && jobStartedMs_ != 0 &&
+      (millis() - jobStartedMs_ > kJobStuckMs);
+  if (stuck) {
+    jobEpoch_++;
+    busy_ = false;
+    resultReady_ = false;
+    result_ = OrImageResult{};
+    Serial.printf("[or-image] reclaim stuck job age=%lums\n",
+                  (unsigned long)(millis() - jobStartedMs_));
+    jobStartedMs_ = 0;
+  }
+  portEXIT_CRITICAL(&mux_);
+}
 
 bool orImageStart(const OrImageRequest &req, OrImageResult *earlyErr) {
   auto fail = [&](const char *msg) -> bool {
@@ -574,6 +749,27 @@ bool orImageStart(const OrImageRequest &req, OrImageResult *earlyErr) {
   if (!req.prompt || !req.prompt[0]) return fail("missing prompt");
   if (!req.storage) return fail("no storage");
 
+  reclaimIfStuck();
+
+  // After force-reset, a zombie task may still be winding down — wait briefly.
+  for (int i = 0; i < 50; i++) {
+    portENTER_CRITICAL(&mux_);
+    const bool hasTask = task_ != nullptr;
+    const bool isBusy = busy_;
+    portEXIT_CRITICAL(&mux_);
+    if (!hasTask && !isBusy) break;
+    if (!hasTask && isBusy) {
+      // busy stuck with no task — reclaim immediately.
+      portENTER_CRITICAL(&mux_);
+      busy_ = false;
+      jobEpoch_++;
+      portEXIT_CRITICAL(&mux_);
+      Serial.printf("[or-image] cleared orphan busy\n");
+      break;
+    }
+    delay(20);
+  }
+
   portENTER_CRITICAL(&mux_);
   if (busy_ || task_) {
     portEXIT_CRITICAL(&mux_);
@@ -581,6 +777,8 @@ bool orImageStart(const OrImageRequest &req, OrImageResult *earlyErr) {
   }
   busy_ = true;
   resultReady_ = false;
+  runningEpoch_ = ++jobEpoch_;
+  jobStartedMs_ = millis();
   portEXIT_CRITICAL(&mux_);
 
   strncpy(apiKey_, req.apiKey, sizeof(apiKey_) - 1);
@@ -598,6 +796,12 @@ bool orImageStart(const OrImageRequest &req, OrImageResult *earlyErr) {
     model_[0] = '\0';
   }
   storage_ = req.storage;
+  attachReference_ = req.attachReference;
+  refReqPath_[0] = '\0';
+  if (req.referencePath && req.referencePath[0]) {
+    strncpy(refReqPath_, req.referencePath, sizeof(refReqPath_) - 1);
+    refReqPath_[sizeof(refReqPath_) - 1] = '\0';
+  }
 
   const BaseType_t ok =
       xTaskCreatePinnedToCore(imageTask, "or_image", 16384, nullptr, 3,
@@ -606,6 +810,7 @@ bool orImageStart(const OrImageRequest &req, OrImageResult *earlyErr) {
     portENTER_CRITICAL(&mux_);
     busy_ = false;
     task_ = nullptr;
+    jobStartedMs_ = 0;
     portEXIT_CRITICAL(&mux_);
     return fail("task create failed");
   }
@@ -614,8 +819,9 @@ bool orImageStart(const OrImageRequest &req, OrImageResult *earlyErr) {
 }
 
 bool orImageBusy() {
+  reclaimIfStuck();
   portENTER_CRITICAL(&mux_);
-  const bool b = busy_;
+  const bool b = busy_ || task_ != nullptr;
   portEXIT_CRITICAL(&mux_);
   return b;
 }
@@ -638,13 +844,17 @@ const char *orImageStatus() { return status_; }
 uint32_t orImageStatusGen() { return statusGen_; }
 
 void orImageReset() {
-  bool clear = false;
+  // Always reclaim — Talk stop/start must not leave generate_image wedged.
   portENTER_CRITICAL(&mux_);
-  if (!busy_) {
-    resultReady_ = false;
-    result_ = OrImageResult{};
-    clear = true;
-  }
+  jobEpoch_++;
+  busy_ = false;
+  resultReady_ = false;
+  result_ = OrImageResult{};
+  jobStartedMs_ = 0;
+  // Leave task_ for the worker to null on exit; start() waits briefly.
   portEXIT_CRITICAL(&mux_);
-  if (clear) setStatus("Idle");
+  lastImagePath_[0] = '\0';
+  refReqPath_[0] = '\0';
+  setStatus("Idle");
+  Serial.printf("[or-image] reset (epoch=%u)\n", (unsigned)jobEpoch_);
 }

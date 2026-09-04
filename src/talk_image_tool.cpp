@@ -29,6 +29,8 @@ bool toolGenerateImage(JsonObjectConst params, char *resultOut,
 void talkImageToolReset() {
   pending_ = false;
   pendingCallId_[0] = '\0';
+  // Always reclaim — previously skipped while busy_, which wedged every later
+  // generate_image as "already running" across Talk reconnects.
   orImageReset();
 }
 

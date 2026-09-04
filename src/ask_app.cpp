@@ -2,6 +2,7 @@
 
 #include "audio_volume.h"
 #include "image_preview.h"
+#include "openrouter_image.h"
 #include "talk_agent.h"
 #include "talk_tools.h"
 
@@ -16,16 +17,26 @@ const char *AskApp::pageTitle(uint8_t id) const {
 }
 
 uint8_t AskApp::shellStatusCount() const {
-  return pageId() == kPageTalk ? 1 : 0;
+  if (pageId() != kPageTalk) return 0;
+  return orImageBusy() ? 2 : 1;
 }
 
 const char *AskApp::shellStatusIcon(uint8_t i) const {
-  if (pageId() != kPageTalk || i != 0) return nullptr;
-  return "circle";
+  if (pageId() != kPageTalk) return nullptr;
+  if (orImageBusy()) {
+    if (i == 0) return "images";
+    if (i == 1) return "circle";
+    return nullptr;
+  }
+  return i == 0 ? "circle" : nullptr;
 }
 
 uint16_t AskApp::shellStatusColor(uint8_t i) const {
-  if (pageId() != kPageTalk || i != 0) return 0;
+  if (pageId() != kPageTalk) return 0;
+  const Theme::ThemeTokens &th = Theme::active();
+  if (orImageBusy() && i == 0) {
+    return Theme::lerp(th.baseContent, th.base100, 0.35f);
+  }
   return healthColor();
 }
 
@@ -71,6 +82,9 @@ bool AskApp::handleKey(UIEvent &e) {
   // and scrolls the page out from under the reading.
   if (pageId() != kPageTalk) {
     return false;
+  }
+  if (showingImage_ || imageLoading_) {
+    noteImageInteraction();
   }
   if (e.key == UIKey::Select) {
     // Press: mute agent locally and listen. Real interrupt is voice barge-in
@@ -265,6 +279,7 @@ void AskApp::resetTalkState() {
   toolTextGen_ = 0;
   previewGen_ = 0;
   showingImage_ = false;
+  imageIdleSinceMs_ = 0;
   imageLoading_ = false;
   pendingGalleryIndex_ = -1;
   galleryLoadWarmup_ = 0;
@@ -375,6 +390,7 @@ void AskApp::runPendingGalleryLoad() {
   sessionImageIndex_ = index;
   previewGen_ = imagePreviewGen();
   showingImage_ = true;
+  noteImageInteraction();
   setPageFullscreen(kPageTalk, true);
   galleryStatusLine_[0] = '\0';
   requestRebuild();
@@ -386,12 +402,17 @@ void AskApp::dismissImage() {
   galleryLoadWarmup_ = 0;
   imageLoading_ = false;
   showingImage_ = false;
+  imageIdleSinceMs_ = 0;
   galleryStatusLine_[0] = '\0';
   setPageFullscreen(kPageTalk, false);
   imagePreviewClear();
   previewGen_ = imagePreviewGen();
   requestRebuild();
   page().invalidateContent();
+}
+
+void AskApp::noteImageInteraction() {
+  imageIdleSinceMs_ = millis();
 }
 
 int16_t AskApp::volumeBarCount() const {
@@ -402,10 +423,15 @@ int16_t AskApp::volumeBarCount() const {
   return bars;
 }
 
-void AskApp::paintVolumeBars(UIDiv &row) const {
+void AskApp::paintVolumeBars(UIDiv &wrap) const {
   const Theme::ThemeTokens &th = Theme::active();
-  const uint16_t on = th.baseContent;
+  // Softer than pure baseContent — less harsh on dark/light panels.
+  const uint16_t on = Theme::lerp(th.baseContent, th.base100, 0.4f);
   const uint16_t off = th.base300;
+  UINode *barsNode =
+      wrap.childCount() > 1 ? wrap.child(1) : wrap.child(0);
+  if (!barsNode) return;
+  UIDiv &row = static_cast<UIDiv &>(*barsNode);
   const int16_t filled = volumeBarCount();
   for (uint8_t i = 0; i < kVolumeBars && i < row.childCount(); i++) {
     UINode *bar = row.child(i);
@@ -526,6 +552,7 @@ void AskApp::onTalkTick(UINode &node, float dt) {
       self->galleryStatusLine_[0] = '\0';
       self->rememberSessionImage(imagePreviewPath());
       self->showingImage_ = true;
+      self->noteImageInteraction();
       self->setPageFullscreen(kPageTalk, true);
     }
     self->requestRebuild();
@@ -533,7 +560,16 @@ void AskApp::onTalkTick(UINode &node, float dt) {
     return;
   }
   if (self->showingImage_ || self->imageLoading_) {
-    // Keep the session alive; don't poke talk chrome that isn't on screen.
+    // New AI text, or 10s idle while the image is up → back to talk chrome.
+    if (toolChanged) {
+      self->dismissImage();
+      return;
+    }
+    if (self->showingImage_ && !self->imageLoading_ &&
+        self->imageIdleSinceMs_ != 0 &&
+        (now - self->imageIdleSinceMs_) >= kImagePreviewIdleMs) {
+      self->dismissImage();
+    }
     return;
   }
   if (toolChanged) {
@@ -636,16 +672,22 @@ void AskApp::buildTalk(Page &page) {
                               .setAlignV(Align::Center));
 
   // Title + health live in the Shell nav. Body: status, AI text, volume, badge.
-  constexpr int16_t kVolRowW =
+  const uint16_t barOn = Theme::lerp(th.baseContent, th.base100, 0.4f);
+  constexpr int16_t kBarsW =
       kVolumeBars * kVolumeBarW + (kVolumeBars - 1) * kVolumeBarGap;
-  auto &volRow =
+  constexpr int16_t kVolChromeW = kVolumeIcon + kVolumeIconGap + kBarsW;
+
+  auto &volBars =
       page.div().style(Style()
-                           .setWidth(Length::Px(kVolRowW))
+                           .setPosition(Position::Absolute)
+                           .setLeft(Length::Px(kVolumeIcon + kVolumeIconGap))
+                           .setTop(Length::Px(0))
+                           .setWidth(Length::Px(kBarsW))
                            .setHeight(Length::Px(kVolumeBarH)));
   {
     const int16_t filled = volumeBarCount();
     for (int16_t i = 0; i < kVolumeBars; i++) {
-      volRow.add(
+      volBars.add(
           page.div().style(Style()
                                .setPosition(Position::Absolute)
                                .setLeft(Length::Px(
@@ -654,10 +696,34 @@ void AskApp::buildTalk(Page &page) {
                                .setWidth(Length::Px(kVolumeBarW))
                                .setHeight(Length::Px(kVolumeBarH))
                                .setRadius(2)
-                               .setBackground(i < filled ? th.baseContent
+                               .setBackground(i < filled ? barOn
                                                          : th.base300)));
     }
   }
+
+  auto &spk = page.button()
+                  .icon("volume-2")
+                  .color(ButtonColor::Secondary)
+                  .variant(ButtonVariant::Ghost)
+                  .style(Style()
+                             .setPosition(Position::Absolute)
+                             .setLeft(Length::Px(0))
+                             .setTop(Length::Px(0))
+                             .setWidth(Length::Px(kVolumeIcon + 4))
+                             .setHeight(Length::Px(kVolumeBarH))
+                             .setPadding(Edges(0))
+                             .setIconSize(static_cast<uint8_t>(kVolumeIcon))
+                             .setAlignH(Align::Center)
+                             .setAlignV(Align::Center));
+  spk.setHighlightable(false);
+
+  auto &volWrap =
+      page.div()
+          .style(Style()
+                     .setWidth(Length::Px(kVolChromeW))
+                     .setHeight(Length::Px(kVolumeBarH)))
+          .add(spk)
+          .add(volBars);
 
   root.add(page.text(talkLine_)
                .style(Style()
@@ -673,7 +739,7 @@ void AskApp::buildTalk(Page &page) {
                           .setFont(FontRole::Small)
                           .setColor(th.baseContent)
                           .setAlign(Align::Center)))
-      .add(volRow);
+      .add(volWrap);
 
   if (sessionImageCount_ > 0) {
     formatGalleryBadge();

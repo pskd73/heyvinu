@@ -5,6 +5,7 @@
 #include "talk_context.h"
 #include "talk_image_tool.h"
 #include "talk_tools.h"
+#include "settings_app.h"
 #include "talk_ulaw.h"
 #include "net_wifi.h"
 #include "runtime_config.h"
@@ -493,6 +494,16 @@ static void handleClientToolCall(JsonDocument &doc) {
   // Async tools (image gen): start work and reply later from the WS task so
   // we do not block pings / mic uplink for tens of seconds.
   if (!strcmp(name, "generate_image")) {
+    if (!settingsVisualiseEnabled()) {
+      // Always reply immediately so the agent learns Visualise is off and
+      // does not wait on a pending image job.
+      constexpr const char *kDisabled =
+          "Visualise is disabled in device settings. Image generation is "
+          "unavailable until the user turns Visualise on.";
+      logf("tool generate_image blocked (visualise off)\n");
+      sendToolResult(id, kDisabled, /*isError=*/false);
+      return;
+    }
     char result[160];
     bool pending = false;
     const bool ok = talkImageToolStart(id, params.as<JsonObjectConst>(), result,
@@ -1091,8 +1102,11 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
   talkToolsRegisterDefaults();
   talkImageToolReset();
   talkImageToolSetStorage(sessionStorage());
+  // Always register so the agent can call generate_image and get an immediate
+  // "disabled" result when Visualise is off (instead of an unknown tool).
   talkImageToolRegister();
-  logf("tools registered\n");
+  logf("tools registered (visualise=%d)\n",
+       settingsVisualiseEnabled() ? 1 : 0);
   micUplinkClear();
   agentInRate = TALK_SAMPLE_RATE;
   agentInUlaw = false;
