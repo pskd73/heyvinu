@@ -28,6 +28,14 @@ bool talkAgentIsActive();
 bool talkAgentIsReady();
 bool talkAgentIsSpeaking();
 
+/**
+ * Select: mute agent playback and wait for ElevenLabs barge-in.
+ * Clears the play ring only (I2S stays up). Speak after pressing — the server
+ * sends `interruption` when it hears you; that is the official interrupt path.
+ * (`user_activity` is not used; it does not cancel in-flight TTS.)
+ */
+void talkAgentUserActivity();
+
 float talkAgentPlayLevel();
 int talkAgentWaveBars(uint8_t *out, int maxBars);
 

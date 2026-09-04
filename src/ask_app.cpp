@@ -48,6 +48,14 @@ bool AskApp::handleKey(UIEvent &e) {
   if (pageId() != kPageTalk) {
     return false;
   }
+  if (e.key == UIKey::Select) {
+    // Press: mute agent locally and listen. Real interrupt is voice barge-in
+    // (mic uplink → ElevenLabs `interruption`). I2S stays up.
+    if (e.phase == UIKeyPhase::Down && started_ && !failed_) {
+      talkAgentUserActivity();
+    }
+    return true;
+  }
   if (e.key != UIKey::Up && e.key != UIKey::Down) {
     return false;
   }

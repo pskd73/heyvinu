@@ -67,6 +67,21 @@ static uint32_t playUnderruns = 0;
 static uint32_t playRingDrops = 0;
 static uint32_t playStatMs = 0;
 
+/**
+ * Select "I want to talk": mute agent audio locally until ElevenLabs confirms
+ * barge-in with `interruption` (or the agent stream goes idle). I2S stays up.
+ * This is the SDK pattern — interrupt is server-driven; the client only stops
+ * playback. `user_activity` is the wrong tool (typing keepalive, not barge-in).
+ */
+static volatile bool holdListening = false;
+static uint32_t holdStartedMs = 0;
+static uint32_t lastHoldDropMs = 0;
+/**
+ * ElevenLabs SDK pattern: after an interruption, ignore audio chunks whose
+ * event_id is still from the interrupted turn.
+ */
+static int lastInterruptEventId = 0;
+
 static const int kWaveBars = 24;
 static uint8_t waveBars[kWaveBars];
 static float playLevelEma = 0.0f;
@@ -586,6 +601,27 @@ static void handleAudioInPlace(char *payload, size_t length) {
   // Every bail-out below discards a whole chunk — up to a second of speech —
   // so none of them may be silent. A truncated frame lands on the unterminated
   // case, which is otherwise indistinguishable from audio that never arrived.
+
+  // Select hold: drop the rest of this agent turn until `interruption` (or idle).
+  // Do this before decode so we do not revive Speaking via lastAgentAudioMs.
+  if (holdListening) {
+    lastHoldDropMs = millis();
+    return;
+  }
+
+  // Match the JS SDK: drop audio that belongs to a turn already interrupted.
+  {
+    const char *eidKey = strstr(payload, "\"event_id\"");
+    if (eidKey && lastInterruptEventId > 0) {
+      const char *p = eidKey + 10;
+      while (*p == ':' || *p == ' ' || *p == '\t') p++;
+      const int eid = atoi(p);
+      if (eid > 0 && eid <= lastInterruptEventId) {
+        return;
+      }
+    }
+  }
+
   char *key = strstr(payload, "audio_base_64");
   if (!key) {
     logf("audio parse: no key (len=%u)\n", (unsigned)length);
@@ -727,18 +763,22 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
     talkContextAppend(&talkCtx, TalkTurnRole::Agent, t);
     contextDirty = true;
     persistContext();
-    setStatus("Speaking");
+    if (!holdListening) setStatus("Speaking");
     logf("agent: %s\n", t);
   } else if (!strcmp(type, "interruption")) {
-    // How much buffered speech this throws away is the whole question when the
-    // interruption was spurious — the prime buffer means it is never zero.
+    // Official barge-in signal. Same cleanup as the ElevenLabs SDK
+    // (audioInterface.interrupt / fadeOutAudio).
+    JsonObject ev = doc["interruption_event"];
+    const int eid = ev["event_id"] | 0;
+    if (eid > lastInterruptEventId) lastInterruptEventId = eid;
     const uint32_t lostMs = talkPlayRingUsedMs();
     talkPlayRingClear();
     playPriming = true;
+    holdListening = false;
     lastAgentAudioMs = 0;
     lastNonSilentPlayMs = 0;
     setStatus("Listening");
-    logf("(interrupted) discarded=%lums\n", (unsigned long)lostMs);
+    logf("(interrupted) id=%d discarded=%lums\n", eid, (unsigned long)lostMs);
   } else if (!strcmp(type, "client_tool_call")) {
     handleClientToolCall(doc);
   } else if (!strcmp(type, "agent_tool_request")) {
@@ -765,6 +805,10 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
     playUnderruns = 0;
     playRingDrops = 0;
     playStatMs = 0;
+    holdListening = false;
+    holdStartedMs = 0;
+    lastHoldDropMs = 0;
+    lastInterruptEventId = 0;
     talkAudioResetWriteStats();
     agentInUlaw = false;
     agentInRate = TALK_SAMPLE_RATE;
@@ -821,6 +865,15 @@ static void wsTask(void *arg) {
         sendPong(pendingPongId);
       }
       sendMicChunkFromUplink();
+
+      // Select hold: once the agent stops sending audio, release so the next
+      // turn can play. Real barge-in clears hold earlier via `interruption`.
+      if (holdListening && lastHoldDropMs != 0 &&
+          (millis() - lastHoldDropMs) > 800 &&
+          (millis() - holdStartedMs) > 400) {
+        holdListening = false;
+        logf("hold released (agent audio idle)\n");
+      }
 
       // cap/sent are the two numbers ElevenLabs is really comparing: if sent
       // trails wall clock the stream has holes. backlog rising means the drain
@@ -1024,6 +1077,10 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
   lastUplinkStatMs = 0;
   pendingInit = false;
   pendingPong = false;
+  holdListening = false;
+  holdStartedMs = 0;
+  lastHoldDropMs = 0;
+  lastInterruptEventId = 0;
   lastAgentAudioMs = 0;
   lastNonSilentPlayMs = 0;
   playPriming = true;
@@ -1060,6 +1117,7 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
 void talkAgentStop() {
   pendingInit = false;
   pendingPong = false;
+  holdListening = false;
   persistContext();
   stopAudioTask();
   stopWsTask();
@@ -1117,7 +1175,29 @@ static bool agentIsSpeaking() {
   return false;
 }
 
-bool talkAgentIsSpeaking() { return agentActive && agentIsSpeaking(); }
+bool talkAgentIsSpeaking() {
+  return agentActive && !holdListening && agentIsSpeaking();
+}
+
+void talkAgentUserActivity() {
+  if (!agentActive || !agentReady) return;
+
+  // ElevenLabs barge-in is server-side (VAD on your mic uplink → `interruption`).
+  // Select only mutes local playback so you can speak into an open mic; I2S
+  // keeps running. Do not send `user_activity` — that is a typing keepalive and
+  // does not cancel in-flight TTS (which is why status flipped back to Speaking).
+  const uint32_t lostMs = talkPlayRingUsedMs();
+  talkPlayRingClear();
+  playPriming = true;
+  lastAgentAudioMs = 0;
+  lastNonSilentPlayMs = 0;
+  holdListening = true;
+  holdStartedMs = millis();
+  lastHoldDropMs = holdStartedMs;
+  setStatus("Listening");
+  logf("take floor ring_cleared=%lums — speak to barge in\n",
+       (unsigned long)lostMs);
+}
 
 float talkAgentPlayLevel() { return playLevelEma; }
 
@@ -1234,7 +1314,9 @@ static void talkAgentPumpAudio() {
          (unsigned long)talkAudioWriteMaxMs());
   }
 
-  if (agentIsSpeaking()) {
+  if (holdListening) {
+    if (strcmp(statusBuf, "Listening") != 0) setStatus("Listening");
+  } else if (agentIsSpeaking()) {
     if (strcmp(statusBuf, "Listening") == 0) {
       setStatus("Speaking");
     }
