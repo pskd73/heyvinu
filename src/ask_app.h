@@ -55,6 +55,11 @@ protected:
   void onClose() override;
   void build(Page &page, uint8_t pageId) override;
 
+  const char *pageTitle(uint8_t id) const override;
+  uint8_t shellStatusCount() const override;
+  const char *shellStatusIcon(uint8_t i) const override;
+  uint16_t shellStatusColor(uint8_t i) const override;
+
 private:
   static AskApp *self_;
 
@@ -85,24 +90,45 @@ private:
   static void onAgentSelect(UISelect &sel);
 
   // --- Live conversation ---
-  /** Matches the Settings volume slider step. */
-  static constexpr int16_t kVolumeStep = 5;
+  /** One bar per step; 5 bars → 0/20/40/60/80/100%. */
+  static constexpr int16_t kVolumeStep = 20;
+  static constexpr int16_t kVolumeBars = 5;
+  static constexpr int16_t kVolumeBarW = 10;
+  static constexpr int16_t kVolumeBarH = 14;
+  static constexpr int16_t kVolumeBarGap = 4;
+  /** Images generated during the current talk session (SD paths). */
+  static constexpr int kMaxSessionImages = 16;
+  static constexpr int16_t kPreviewW = 280;
+  static constexpr int16_t kPreviewH = 240;
 
-  /** Child order of the talk page, mutated in place from the tick. */
-  static constexpr uint8_t kTalkDot = 0;
-  static constexpr uint8_t kTalkTitle = 1;
-  static constexpr uint8_t kTalkStatus = 2;
-  static constexpr uint8_t kTalkTool = 3;
-  static constexpr uint8_t kTalkVolume = 4;
+  /** Child order of the default talk page (not used in fullscreen image). */
+  static constexpr uint8_t kTalkStatus = 0;
+  static constexpr uint8_t kTalkTool = 1;
+  static constexpr uint8_t kTalkVolume = 2;
+  /** Optional gallery badge is appended after volume when count > 0. */
 
   char talkTitle_[40] = {};
   char talkLine_[48] = "Connecting...";
+  /** AI `show_text` only — never written by image/status code. */
   char toolLine_[128] = " ";
-  char volumeLine_[24] = {};
+  /** Gallery loading / badge (not the AI tool line). */
+  char galleryStatusLine_[32] = {};
+  char galleryBadge_[8] = {};
   char agentId_[48] = {};
   bool volumeDirty_ = false;
   uint16_t healthColor_ = 0;
   uint32_t toolTextGen_ = 0;
+  uint32_t previewGen_ = 0;
+  /** Fullscreen generated-image overlay; Back dismisses to talk UI. */
+  bool showingImage_ = false;
+  /** True while SD→RGB565 decode is pending (show Loading… first). */
+  bool imageLoading_ = false;
+  /** >=0 → load this gallery index on the next talk tick. */
+  int pendingGalleryIndex_ = -1;
+  uint8_t galleryLoadWarmup_ = 0;
+  char sessionImages_[kMaxSessionImages][96] = {};
+  int sessionImageCount_ = 0;
+  int sessionImageIndex_ = -1;
   bool pendingStart_ = false;
   bool started_ = false;
   bool failed_ = false;
@@ -112,8 +138,16 @@ private:
   void openTalk(int index);
   void resetTalkState();
   void leaveTalk();
+  void dismissImage();
+  void clearSessionImages();
+  void rememberSessionImage(const char *absPath);
+  void formatGalleryBadge();
+  bool showSessionImage(int index);
+  bool navigateSessionImage(int delta);
+  void runPendingGalleryLoad();
   void formatTalkStatus();
-  void formatVolumeLine();
+  int16_t volumeBarCount() const;
+  void paintVolumeBars(UIDiv &row) const;
   bool adjustVolume(int16_t delta);
   uint16_t healthColor() const;
   void buildTalk(Page &page);

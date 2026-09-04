@@ -1,6 +1,7 @@
 #include "ask_app.h"
 
 #include "audio_volume.h"
+#include "image_preview.h"
 #include "talk_agent.h"
 #include "talk_tools.h"
 
@@ -8,6 +9,25 @@
 #include <string.h>
 
 AskApp *AskApp::self_ = nullptr;
+
+const char *AskApp::pageTitle(uint8_t id) const {
+  if (id == kPageTalk && talkTitle_[0]) return talkTitle_;
+  return App<AskState>::pageTitle(id);
+}
+
+uint8_t AskApp::shellStatusCount() const {
+  return pageId() == kPageTalk ? 1 : 0;
+}
+
+const char *AskApp::shellStatusIcon(uint8_t i) const {
+  if (pageId() != kPageTalk || i != 0) return nullptr;
+  return "circle";
+}
+
+uint16_t AskApp::shellStatusColor(uint8_t i) const {
+  if (pageId() != kPageTalk || i != 0) return 0;
+  return healthColor();
+}
 
 void AskApp::onOpen() {
   self_ = this;
@@ -35,6 +55,10 @@ void AskApp::onClose() {
 }
 
 bool AskApp::goBack() {
+  if (pageId() == kPageTalk && showingImage_) {
+    dismissImage();
+    return true;
+  }
   if (pageId() == kPageTalk) {
     leaveTalk();
   }
@@ -53,6 +77,12 @@ bool AskApp::handleKey(UIEvent &e) {
     // (mic uplink → ElevenLabs `interruption`). I2S stays up.
     if (e.phase == UIKeyPhase::Down && started_ && !failed_) {
       talkAgentUserActivity();
+    }
+    return true;
+  }
+  if (e.key == UIKey::Left || e.key == UIKey::Right) {
+    if (e.phase == UIKeyPhase::Down) {
+      navigateSessionImage(e.key == UIKey::Right ? 1 : -1);
     }
     return true;
   }
@@ -214,7 +244,6 @@ void AskApp::openTalk(int index) {
   toolLine_[0] = ' ';
   toolLine_[1] = '\0';
   toolTextGen_ = talkToolsTextGen();
-  formatVolumeLine();
   volumeDirty_ = false;
   started_ = false;
   failed_ = false;
@@ -234,30 +263,175 @@ void AskApp::resetTalkState() {
   toolLine_[0] = ' ';
   toolLine_[1] = '\0';
   toolTextGen_ = 0;
+  previewGen_ = 0;
+  showingImage_ = false;
+  imageLoading_ = false;
+  pendingGalleryIndex_ = -1;
+  galleryLoadWarmup_ = 0;
+  galleryStatusLine_[0] = '\0';
+  clearSessionImages();
+  setPageFullscreen(kPageTalk, false);
 }
 
 void AskApp::leaveTalk() {
   resetTalkState();
+  imagePreviewClear();
   talkAgentStop();
 }
 
-void AskApp::formatVolumeLine() {
-  snprintf(volumeLine_, sizeof(volumeLine_), "Volume %d%%",
-           (int)ChitramAudio::volumePercent());
+void AskApp::clearSessionImages() {
+  sessionImageCount_ = 0;
+  sessionImageIndex_ = -1;
+  for (int i = 0; i < kMaxSessionImages; i++) {
+    sessionImages_[i][0] = '\0';
+  }
+  formatGalleryBadge();
+}
+
+void AskApp::formatGalleryBadge() {
+  snprintf(galleryBadge_, sizeof(galleryBadge_), "%d", sessionImageCount_);
+}
+
+void AskApp::rememberSessionImage(const char *absPath) {
+  if (!absPath || !absPath[0]) return;
+  for (int i = 0; i < sessionImageCount_; i++) {
+    if (strcmp(sessionImages_[i], absPath) == 0) {
+      sessionImageIndex_ = i;
+      return;
+    }
+  }
+  if (sessionImageCount_ >= kMaxSessionImages) {
+    memmove(sessionImages_[0], sessionImages_[1],
+            (size_t)(kMaxSessionImages - 1) * sizeof(sessionImages_[0]));
+    sessionImageCount_ = kMaxSessionImages - 1;
+  }
+  strncpy(sessionImages_[sessionImageCount_], absPath,
+          sizeof(sessionImages_[0]) - 1);
+  sessionImages_[sessionImageCount_][sizeof(sessionImages_[0]) - 1] = '\0';
+  sessionImageIndex_ = sessionImageCount_;
+  sessionImageCount_++;
+  formatGalleryBadge();
+}
+
+bool AskApp::showSessionImage(int index) {
+  if (index < 0 || index >= sessionImageCount_) return false;
+  // Defer the blocking SD decode so "Loading…" can paint for a frame.
+  pendingGalleryIndex_ = index;
+  imageLoading_ = true;
+  galleryLoadWarmup_ = 1;
+  sessionImageIndex_ = index;
+  showingImage_ = true;
+  setPageFullscreen(kPageTalk, true);
+  snprintf(galleryStatusLine_, sizeof(galleryStatusLine_), "Loading");
+  requestRebuild();
+  page().invalidateContent();
+  return true;
+}
+
+bool AskApp::navigateSessionImage(int delta) {
+  if (sessionImageCount_ <= 0) return false;
+  if (delta == 0) return false;
+
+  // Carousel: talk ↔ img0 ↔ … ↔ imgN-1 ↔ talk …
+  if (!showingImage_) {
+    const int idx = (delta > 0) ? 0 : (sessionImageCount_ - 1);
+    return showSessionImage(idx);
+  }
+
+  int next = sessionImageIndex_ + delta;
+  if (next < 0 || next >= sessionImageCount_) {
+    dismissImage();
+    return true;
+  }
+  return showSessionImage(next);
+}
+
+void AskApp::runPendingGalleryLoad() {
+  if (pendingGalleryIndex_ < 0) return;
+  if (galleryLoadWarmup_ > 0) {
+    galleryLoadWarmup_--;
+    return;
+  }
+
+  const int index = pendingGalleryIndex_;
+  pendingGalleryIndex_ = -1;
+
+  Storage *st = host() ? host()->storage() : nullptr;
+  if (!st || !st->ready() || index < 0 || index >= sessionImageCount_) {
+    imageLoading_ = false;
+    dismissImage();
+    return;
+  }
+
+  const bool ok =
+      imagePreviewLoad(st, sessionImages_[index], kPreviewW, kPreviewH);
+  imageLoading_ = false;
+  if (!ok) {
+    Serial.printf("[ask] gallery load failed %s\n", sessionImages_[index]);
+    dismissImage();
+    return;
+  }
+
+  sessionImageIndex_ = index;
+  previewGen_ = imagePreviewGen();
+  showingImage_ = true;
+  setPageFullscreen(kPageTalk, true);
+  galleryStatusLine_[0] = '\0';
+  requestRebuild();
+  page().invalidateContent();
+}
+
+void AskApp::dismissImage() {
+  pendingGalleryIndex_ = -1;
+  galleryLoadWarmup_ = 0;
+  imageLoading_ = false;
+  showingImage_ = false;
+  galleryStatusLine_[0] = '\0';
+  setPageFullscreen(kPageTalk, false);
+  imagePreviewClear();
+  previewGen_ = imagePreviewGen();
+  requestRebuild();
+  page().invalidateContent();
+}
+
+int16_t AskApp::volumeBarCount() const {
+  int16_t bars =
+      static_cast<int16_t>(ChitramAudio::volumePercent() / kVolumeStep);
+  if (bars < 0) bars = 0;
+  if (bars > kVolumeBars) bars = kVolumeBars;
+  return bars;
+}
+
+void AskApp::paintVolumeBars(UIDiv &row) const {
+  const Theme::ThemeTokens &th = Theme::active();
+  const uint16_t on = th.baseContent;
+  const uint16_t off = th.base300;
+  const int16_t filled = volumeBarCount();
+  for (uint8_t i = 0; i < kVolumeBars && i < row.childCount(); i++) {
+    UINode *bar = row.child(i);
+    if (!bar) continue;
+    bar->style().setBackground(i < filled ? on : off);
+  }
 }
 
 bool AskApp::adjustVolume(int16_t delta) {
   const int16_t cur = ChitramAudio::volumePercent();
-  int16_t next = static_cast<int16_t>(cur + delta);
-  if (next < ChitramAudio::kVolumeMin) next = ChitramAudio::kVolumeMin;
-  if (next > ChitramAudio::kVolumeMax) next = ChitramAudio::kVolumeMax;
+  int16_t bars = static_cast<int16_t>(cur / kVolumeStep);
+  if (bars > kVolumeBars) bars = kVolumeBars;
+  if (delta > 0) {
+    bars = static_cast<int16_t>(bars + 1);
+  } else if (delta < 0) {
+    bars = static_cast<int16_t>(bars - 1);
+  }
+  if (bars < 0) bars = 0;
+  if (bars > kVolumeBars) bars = kVolumeBars;
+  const int16_t next = static_cast<int16_t>(bars * kVolumeStep);
   if (next == cur) {
     return false;
   }
   ChitramAudio::setVolumePercent(next);
-  formatVolumeLine();
-  // The label repaints through the normal tick, which holds off while the
-  // agent is speaking — the gain itself already changed.
+  // Bars repaint through the normal tick, which holds off while the agent is
+  // speaking — the gain itself already changed.
   volumeDirty_ = true;
   return true;
 }
@@ -319,6 +493,8 @@ void AskApp::onTalkTick(UINode &node, float dt) {
 
   talkAgentLoop();
 
+  self->runPendingGalleryLoad();
+
   if (self->started_ && !self->failed_ && !talkAgentIsActive()) {
     self->failed_ = true;
     snprintf(self->errMsg_, sizeof(self->errMsg_), "%s", talkAgentStatus());
@@ -327,7 +503,9 @@ void AskApp::onTalkTick(UINode &node, float dt) {
   const uint32_t now = millis();
 
   const uint32_t toolGen = talkToolsTextGen();
+  const uint32_t previewGen = imagePreviewGen();
   const bool toolChanged = toolGen != self->toolTextGen_;
+  const bool previewChanged = previewGen != self->previewGen_;
   if (toolChanged) {
     self->toolTextGen_ = toolGen;
     snprintf(self->toolLine_, sizeof(self->toolLine_), "%s",
@@ -336,6 +514,29 @@ void AskApp::onTalkTick(UINode &node, float dt) {
       self->toolLine_[0] = ' ';
       self->toolLine_[1] = '\0';
     }
+  }
+  if (previewChanged) {
+    self->previewGen_ = previewGen;
+    // New pixels from generation → gallery + fullscreen (cancel pending nav).
+    if (imagePreviewPixels() && imagePreviewWidth() > 0 &&
+        imagePreviewHeight() > 0) {
+      self->pendingGalleryIndex_ = -1;
+      self->galleryLoadWarmup_ = 0;
+      self->imageLoading_ = false;
+      self->galleryStatusLine_[0] = '\0';
+      self->rememberSessionImage(imagePreviewPath());
+      self->showingImage_ = true;
+      self->setPageFullscreen(kPageTalk, true);
+    }
+    self->requestRebuild();
+    self->page().invalidateContent();
+    return;
+  }
+  if (self->showingImage_ || self->imageLoading_) {
+    // Keep the session alive; don't poke talk chrome that isn't on screen.
+    return;
+  }
+  if (toolChanged) {
     self->requestRebuild();
   }
 
@@ -360,9 +561,6 @@ void AskApp::onTalkTick(UINode &node, float dt) {
   self->healthColor_ = color;
 
   UIDiv &div = static_cast<UIDiv &>(node);
-  if (div.childCount() > kTalkDot && div.child(kTalkDot)) {
-    div.child(kTalkDot)->style().setBackground(color);
-  }
   if (div.childCount() > kTalkStatus && div.child(kTalkStatus)) {
     static_cast<UIText *>(div.child(kTalkStatus))->setText(self->talkLine_);
   }
@@ -370,7 +568,7 @@ void AskApp::onTalkTick(UINode &node, float dt) {
     static_cast<UIText *>(div.child(kTalkTool))->setText(self->toolLine_);
   }
   if (div.childCount() > kTalkVolume && div.child(kTalkVolume)) {
-    static_cast<UIText *>(div.child(kTalkVolume))->setText(self->volumeLine_);
+    self->paintVolumeBars(static_cast<UIDiv &>(*div.child(kTalkVolume)));
   }
 
   self->page().invalidateContent();
@@ -379,47 +577,126 @@ void AskApp::onTalkTick(UINode &node, float dt) {
 void AskApp::buildTalk(Page &page) {
   const Theme::ThemeTokens &th = Theme::active();
   const uint16_t muted = Theme::lerp(th.baseContent, th.base100, 0.4f);
-  // Baked into the dot below, so the tick has the right baseline to diff.
   healthColor_ = healthColor();
 
-  page.add(page.div()
-               .onTick(onTalkTick)
+  const uint16_t *pix = imagePreviewPixels();
+  const int16_t pw = imagePreviewWidth();
+  const int16_t ph = imagePreviewHeight();
+  const bool hasPreview =
+      showingImage_ && !imageLoading_ && pix && pw > 0 && ph > 0;
+
+  if (showingImage_ && imageLoading_) {
+    page.add(page.div()
+                 .onTick(onTalkTick)
+                 .style(Style()
+                            .setWidth(Length::Pct(100))
+                            .setHeight(Length::Pct(100))
+                            .setPadding(Edges(12, 10))
+                            .setColumns(1)
+                            .setAlignH(Align::Center)
+                            .setAlignV(Align::Center))
+                 .add(page.text(galleryStatusLine_)
+                          .style(Style()
+                                     .setWidth(Length::Pct(100))
+                                     .setColor(th.baseContent)
+                                     .setAlign(Align::Center))));
+    return;
+  }
+
+  if (hasPreview) {
+    // Full-bleed image; tick stays on the root so talk keeps running.
+    // UIImage percent height resolves against 0 — use Auto so h = w * srcH/srcW
+    // (280×240 buffer → full panel).
+    page.add(page.div()
+                 .onTick(onTalkTick)
+                 .style(Style()
+                            .setWidth(Length::Pct(100))
+                            .setHeight(Length::Pct(100))
+                            .setPadding(Edges(0))
+                            .setGap(0)
+                            .setColumns(1)
+                            .setAlignH(Align::Center)
+                            .setAlignV(Align::Center))
+                 .add(page.image(pix, pw, ph)
+                          .style(Style()
+                                     .setWidth(Length::Pct(100))
+                                     .setFit(ImageFit::Fill))));
+    return;
+  }
+
+  auto &root = page.div()
+                   .onTick(onTalkTick)
+                   .style(Style()
+                              .setWidth(Length::Pct(100))
+                              .setHeight(Length::Pct(100))
+                              .setPadding(Edges(10, 8))
+                              .setGap(6)
+                              .setColumns(1)
+                              .setAlignH(Align::Center)
+                              .setAlignV(Align::Center));
+
+  // Title + health live in the Shell nav. Body: status, AI text, volume, badge.
+  constexpr int16_t kVolRowW =
+      kVolumeBars * kVolumeBarW + (kVolumeBars - 1) * kVolumeBarGap;
+  auto &volRow =
+      page.div().style(Style()
+                           .setWidth(Length::Px(kVolRowW))
+                           .setHeight(Length::Px(kVolumeBarH)));
+  {
+    const int16_t filled = volumeBarCount();
+    for (int16_t i = 0; i < kVolumeBars; i++) {
+      volRow.add(
+          page.div().style(Style()
+                               .setPosition(Position::Absolute)
+                               .setLeft(Length::Px(
+                                   i * (kVolumeBarW + kVolumeBarGap)))
+                               .setTop(Length::Px(0))
+                               .setWidth(Length::Px(kVolumeBarW))
+                               .setHeight(Length::Px(kVolumeBarH))
+                               .setRadius(2)
+                               .setBackground(i < filled ? th.baseContent
+                                                         : th.base300)));
+    }
+  }
+
+  root.add(page.text(talkLine_)
                .style(Style()
                           .setWidth(Length::Pct(100))
-                          .setHeight(Length::Pct(100))
-                          .setPadding(Edges(12, 10))
-                          .setGap(8)
-                          .setColumns(1)
-                          .setAlignH(Align::Center)
-                          .setAlignV(Align::Center))
-               .add(page.div().style(Style()
-                                         .setWidth(Length::Px(10))
-                                         .setHeight(Length::Px(10))
-                                         .setRadius(5)
-                                         .setBackground(healthColor_)))
-               .add(page.text(talkTitle_)
-                        .style(Style()
-                                   .setWidth(Length::Pct(100))
-                                   .setColor(th.baseContent)
-                                   .setAlign(Align::Center)))
-               .add(page.text(talkLine_)
-                        .style(Style()
-                                   .setWidth(Length::Pct(100))
-                                   .setFont(FontRole::Small)
-                                   .setColor(failed_ ? th.warning : muted)
-                                   .setAlign(Align::Center)))
-               .add(page.text(toolLine_)
-                        .marquee()
-                        .style(Style()
-                                   .setWidth(Length::Pct(100))
-                                   .setHeight(Length::Px(48))
-                                   .setFont(FontRole::Body)
-                                   .setColor(th.baseContent)
-                                   .setAlign(Align::Center)))
-               .add(page.text(volumeLine_)
-                        .style(Style()
-                                   .setWidth(Length::Pct(100))
-                                   .setFont(FontRole::Small)
-                                   .setColor(muted)
-                                   .setAlign(Align::Center))));
+                          .setFont(FontRole::Small)
+                          .setColor(failed_ ? th.warning : muted)
+                          .setAlign(Align::Center)))
+      .add(page.text(toolLine_)
+               .marquee()
+               .style(Style()
+                          .setWidth(Length::Pct(100))
+                          .setHeight(Length::Px(36))
+                          .setFont(FontRole::Small)
+                          .setColor(th.baseContent)
+                          .setAlign(Align::Center)))
+      .add(volRow);
+
+  if (sessionImageCount_ > 0) {
+    formatGalleryBadge();
+    auto &badge =
+        page.button()
+            .icon("images")
+            .color(ButtonColor::Secondary)
+            .variant(ButtonVariant::Soft)
+            .style(Style()
+                       .setWidth(Length::Px(64))
+                       .setPadding(Edges(4, 8))
+                       .setIconSize(16)
+                       .setGap(2)
+                       .setAlignH(Align::Center)
+                       .setAlignV(Align::Center))
+            .add(page.text(galleryBadge_)
+                     .style(Style()
+                                .setFont(FontRole::Small)
+                                .setColor(th.baseContent)
+                                .setAlign(Align::Center)));
+    badge.setHighlightable(false);
+    root.add(badge);
+  }
+
+  page.add(root);
 }

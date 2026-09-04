@@ -3,6 +3,7 @@
 #include "talk_audio.h"
 #include "talk_config.h"
 #include "talk_context.h"
+#include "talk_image_tool.h"
 #include "talk_tools.h"
 #include "talk_ulaw.h"
 #include "net_wifi.h"
@@ -488,6 +489,21 @@ static void handleClientToolCall(JsonDocument &doc) {
   // cheaper than a hung agent that expected one.
   const bool expects = call["expects_response"] | true;
   JsonVariantConst params = call["parameters"];
+
+  // Async tools (image gen): start work and reply later from the WS task so
+  // we do not block pings / mic uplink for tens of seconds.
+  if (!strcmp(name, "generate_image")) {
+    char result[160];
+    bool pending = false;
+    const bool ok = talkImageToolStart(id, params.as<JsonObjectConst>(), result,
+                                       sizeof(result), &pending);
+    logf("tool %s id=%s expects=%d ok=%d pending=%d %s\n", name,
+         id[0] ? id : "?", expects ? 1 : 0, ok ? 1 : 0, pending ? 1 : 0,
+         result);
+    if (expects && !pending) sendToolResult(id, result, !ok);
+    return;
+  }
+
   char result[160];
   const bool ok = talkToolsDispatch(name, params, result, sizeof(result));
   logf("tool %s id=%s expects=%d ok=%d %s\n", name[0] ? name : "?",
@@ -864,6 +880,16 @@ static void wsTask(void *arg) {
         pendingPong = false;
         sendPong(pendingPongId);
       }
+      {
+        char callId[64];
+        char result[160];
+        bool isError = false;
+        if (talkImageToolTakeResult(callId, sizeof(callId), result,
+                                    sizeof(result), &isError)) {
+          sendToolResult(callId, result, isError);
+          logf("tool generate_image done err=%d %s\n", isError ? 1 : 0, result);
+        }
+      }
       sendMicChunkFromUplink();
 
       // Select hold: once the agent stops sending audio, release so the next
@@ -1063,6 +1089,9 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
   talkUlawReset();
   talkToolsReset();
   talkToolsRegisterDefaults();
+  talkImageToolReset();
+  talkImageToolSetStorage(sessionStorage());
+  talkImageToolRegister();
   logf("tools registered\n");
   micUplinkClear();
   agentInRate = TALK_SAMPLE_RATE;
@@ -1126,6 +1155,7 @@ void talkAgentStop() {
   agentReady = false;
   talkAudioStop();
   talkToolsReset();
+  talkImageToolReset();
   sessionHost = nullptr;
   setStatus("Idle");
   logf("talk stopped\n");
