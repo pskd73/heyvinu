@@ -2,6 +2,7 @@
 
 #include "audio_volume.h"
 #include "talk_agent.h"
+#include "talk_tools.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -202,6 +203,9 @@ void AskApp::openTalk(int index) {
   snprintf(agentId_, sizeof(agentId_), "%s", agents_[index].id);
   snprintf(talkTitle_, sizeof(talkTitle_), "%s", agents_[index].name);
   snprintf(talkLine_, sizeof(talkLine_), "Connecting...");
+  toolLine_[0] = ' ';
+  toolLine_[1] = '\0';
+  toolTextGen_ = talkToolsTextGen();
   formatVolumeLine();
   volumeDirty_ = false;
   started_ = false;
@@ -219,6 +223,9 @@ void AskApp::resetTalkState() {
   failed_ = false;
   errMsg_[0] = '\0';
   lastUiMs_ = 0;
+  toolLine_[0] = ' ';
+  toolLine_[1] = '\0';
+  toolTextGen_ = 0;
 }
 
 void AskApp::leaveTalk() {
@@ -310,7 +317,21 @@ void AskApp::onTalkTick(UINode &node, float dt) {
   }
 
   const uint32_t now = millis();
-  if (now - self->lastUiMs_ < kUiMinMs) {
+
+  const uint32_t toolGen = talkToolsTextGen();
+  const bool toolChanged = toolGen != self->toolTextGen_;
+  if (toolChanged) {
+    self->toolTextGen_ = toolGen;
+    snprintf(self->toolLine_, sizeof(self->toolLine_), "%s",
+             talkToolsLastText());
+    if (!self->toolLine_[0]) {
+      self->toolLine_[0] = ' ';
+      self->toolLine_[1] = '\0';
+    }
+    self->requestRebuild();
+  }
+
+  if (now - self->lastUiMs_ < kUiMinMs && !toolChanged) {
     return;
   }
 
@@ -322,7 +343,7 @@ void AskApp::onTalkTick(UINode &node, float dt) {
   const bool healthChanged = color != self->healthColor_;
   const bool textChanged = strcmp(prev, self->talkLine_) != 0;
 
-  if (!textChanged && !self->volumeDirty_ && !healthChanged) {
+  if (!textChanged && !self->volumeDirty_ && !healthChanged && !toolChanged) {
     return;
   }
 
@@ -336,6 +357,9 @@ void AskApp::onTalkTick(UINode &node, float dt) {
   }
   if (div.childCount() > kTalkStatus && div.child(kTalkStatus)) {
     static_cast<UIText *>(div.child(kTalkStatus))->setText(self->talkLine_);
+  }
+  if (div.childCount() > kTalkTool && div.child(kTalkTool)) {
+    static_cast<UIText *>(div.child(kTalkTool))->setText(self->toolLine_);
   }
   if (div.childCount() > kTalkVolume && div.child(kTalkVolume)) {
     static_cast<UIText *>(div.child(kTalkVolume))->setText(self->volumeLine_);
@@ -375,6 +399,14 @@ void AskApp::buildTalk(Page &page) {
                                    .setWidth(Length::Pct(100))
                                    .setFont(FontRole::Small)
                                    .setColor(failed_ ? th.warning : muted)
+                                   .setAlign(Align::Center)))
+               .add(page.text(toolLine_)
+                        .marquee()
+                        .style(Style()
+                                   .setWidth(Length::Pct(100))
+                                   .setHeight(Length::Px(48))
+                                   .setFont(FontRole::Body)
+                                   .setColor(th.baseContent)
                                    .setAlign(Align::Center)))
                .add(page.text(volumeLine_)
                         .style(Style()

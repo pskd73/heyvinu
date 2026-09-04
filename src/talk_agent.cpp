@@ -2,6 +2,7 @@
 #include "talk_aec.h"
 #include "talk_audio.h"
 #include "talk_config.h"
+#include "talk_tools.h"
 #include "talk_ulaw.h"
 #include "net_wifi.h"
 #include "runtime_config.h"
@@ -291,6 +292,41 @@ static void sendPong(int eventId) {
   sendJson(buf);
 }
 
+static void sendToolResult(const char *callId, const char *result, bool isError) {
+  if (!callId || !callId[0]) return;
+  JsonDocument doc;
+  doc["type"] = "client_tool_result";
+  doc["tool_call_id"] = callId;
+  doc["result"] = result ? result : "";
+  doc["is_error"] = isError;
+  String body;
+  serializeJson(doc, body);
+  sendJson(body.c_str());
+}
+
+static JsonObjectConst toolCallObject(JsonDocument &doc) {
+  JsonObjectConst call = doc["client_tool_call"];
+  if (!call.isNull()) return call;
+  call = doc["client_tool_call_event"];
+  if (!call.isNull()) return call;
+  return doc.as<JsonObjectConst>();
+}
+
+static void handleClientToolCall(JsonDocument &doc) {
+  JsonObjectConst call = toolCallObject(doc);
+  const char *name = call["tool_name"] | "";
+  const char *id = call["tool_call_id"] | "";
+  // Default true: if the key is missing we still reply. A spurious result is
+  // cheaper than a hung agent that expected one.
+  const bool expects = call["expects_response"] | true;
+  JsonVariantConst params = call["parameters"];
+  char result[160];
+  const bool ok = talkToolsDispatch(name, params, result, sizeof(result));
+  logf("tool %s id=%s expects=%d ok=%d %s\n", name[0] ? name : "?",
+       id[0] ? id : "?", expects ? 1 : 0, ok ? 1 : 0, result);
+  if (expects) sendToolResult(id, result, !ok);
+}
+
 static int16_t *micSendBuf = nullptr;
 static uint8_t micUlawBuf[TALK_MIC_ULAW_CHUNK_BYTES];
 
@@ -483,7 +519,15 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
     return;
   }
   const char *type = doc["type"] | "";
-  if (!type[0]) return;
+  if (!type[0]) {
+    logf("ws json no type (%u) %.80s\n", (unsigned)length, msg);
+    return;
+  }
+  // Audio is the firehose; everything else is rare and worth a line so a
+  // missed client_tool_call cannot hide as silence.
+  if (strcmp(type, "audio") != 0 && strcmp(type, "ping") != 0) {
+    logf("ws %s (%u)\n", type, (unsigned)length);
+  }
 
   if (!strcmp(type, "conversation_initiation_metadata")) {
     JsonObject ev = doc["conversation_initiation_metadata_event"];
@@ -530,6 +574,12 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
     lastNonSilentPlayMs = 0;
     setStatus("Listening");
     logf("(interrupted) discarded=%lums\n", (unsigned long)lostMs);
+  } else if (!strcmp(type, "client_tool_call")) {
+    handleClientToolCall(doc);
+  } else if (!strcmp(type, "agent_tool_request")) {
+    JsonObjectConst req = doc["agent_tool_request"];
+    logf("tool-req %s type=%s id=%s\n", req["tool_name"] | "?",
+         req["tool_type"] | "?", req["tool_call_id"] | "?");
   } else if (!strcmp(type, "error")) {
     setStatus("Error");
     logf("EL error: %.160s\n", msg);
@@ -562,6 +612,7 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
     setStatus("Connected");
     break;
   case WStype_TEXT:
+  case WStype_BIN:
     handleWsMessage(payload, length);
     break;
   case WStype_DISCONNECTED:
@@ -578,6 +629,12 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
   case WStype_ERROR:
     logf("WS error len=%u\n", (unsigned)length);
     setStatus("WS error");
+    break;
+  case WStype_FRAGMENT:
+  case WStype_FRAGMENT_TEXT_START:
+  case WStype_FRAGMENT_BIN_START:
+  case WStype_FRAGMENT_FIN:
+    logf("ws fragment type=%d len=%u\n", (int)type, (unsigned)length);
     break;
   default:
     break;
@@ -770,6 +827,9 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
   talkAudioResetDsp();
   talkAecReset();
   talkUlawReset();
+  talkToolsReset();
+  talkToolsRegisterDefaults();
+  logf("tools registered\n");
   micUplinkClear();
   agentInRate = TALK_SAMPLE_RATE;
   agentInUlaw = false;
@@ -825,6 +885,7 @@ void talkAgentStop() {
   agentActive = false;
   agentReady = false;
   talkAudioStop();
+  talkToolsReset();
   setStatus("Idle");
   logf("talk stopped\n");
 }

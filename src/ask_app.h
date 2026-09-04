@@ -92,14 +92,17 @@ private:
   static constexpr uint8_t kTalkDot = 0;
   static constexpr uint8_t kTalkTitle = 1;
   static constexpr uint8_t kTalkStatus = 2;
-  static constexpr uint8_t kTalkVolume = 3;
+  static constexpr uint8_t kTalkTool = 3;
+  static constexpr uint8_t kTalkVolume = 4;
 
   char talkTitle_[40] = {};
   char talkLine_[48] = "Connecting...";
+  char toolLine_[128] = " ";
   char volumeLine_[24] = {};
   char agentId_[48] = {};
   bool volumeDirty_ = false;
   uint16_t healthColor_ = 0;
+  uint32_t toolTextGen_ = 0;
   bool pendingStart_ = false;
   bool started_ = false;
   bool failed_ = false;
