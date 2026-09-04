@@ -2,12 +2,14 @@
 #include "talk_aec.h"
 #include "talk_audio.h"
 #include "talk_config.h"
+#include "talk_context.h"
 #include "talk_tools.h"
 #include "talk_ulaw.h"
 #include "net_wifi.h"
 #include "runtime_config.h"
 
 #include <Arduino.h>
+#include <Flow32.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -48,6 +50,10 @@ static char signedPath[768];
 
 // Agent chosen for this session. Empty means fall back to the configured id.
 static char activeAgentId[48];
+
+static AppHost *sessionHost = nullptr;
+static TalkContext talkCtx{};
+static bool contextDirty = false;
 
 static volatile bool pendingInit = false;
 static volatile int pendingPongId = -1;
@@ -275,15 +281,162 @@ static void sendJson(const char *s) {
        ws.isConnected() ? 1 : 0, WiFi.RSSI());
 }
 
+static const char *sessionAgentId() {
+  if (activeAgentId[0]) return activeAgentId;
+  return getConfig(Config::ElevenlabsAgentId);
+}
+
+static Storage *sessionStorage() {
+  return sessionHost ? sessionHost->storage() : nullptr;
+}
+
+static void persistContext() {
+  if (!contextDirty) return;
+  Storage *st = sessionStorage();
+  const char *aid = sessionAgentId();
+  if (!st || !st->ready() || !aid || !aid[0]) return;
+  talkCtx.updatedMs = millis();
+  if (talkContextSave(st, aid, talkCtx)) {
+    contextDirty = false;
+    logf("context saved id=%s len=%u\n", talkCtx.conversationId,
+         (unsigned)talkCtx.len);
+  } else {
+    logf("context save failed\n");
+  }
+}
+
+/** Append JSON-escaped bytes into dst; returns new length or (size_t)-1. */
+static size_t jsonEscapeAppend(char *dst, size_t cap, size_t at, const char *src,
+                               size_t n) {
+  for (size_t i = 0; i < n; i++) {
+    const unsigned char c = (unsigned char)src[i];
+    const char *esc = nullptr;
+    char u[7];
+    size_t elen = 0;
+    switch (c) {
+    case '"':
+      esc = "\\\"";
+      elen = 2;
+      break;
+    case '\\':
+      esc = "\\\\";
+      elen = 2;
+      break;
+    case '\n':
+      esc = "\\n";
+      elen = 2;
+      break;
+    case '\r':
+      esc = "\\r";
+      elen = 2;
+      break;
+    case '\t':
+      esc = "\\t";
+      elen = 2;
+      break;
+    default:
+      if (c < 0x20) {
+        snprintf(u, sizeof(u), "\\u%04x", c);
+        esc = u;
+        elen = 6;
+      } else {
+        if (at + 1 >= cap) return (size_t)-1;
+        dst[at++] = (char)c;
+        continue;
+      }
+      break;
+    }
+    if (at + elen >= cap) return (size_t)-1;
+    memcpy(dst + at, esc, elen);
+    at += elen;
+  }
+  return at;
+}
+
+static bool appendLit(char *dst, size_t cap, size_t *at, const char *s) {
+  const size_t n = strlen(s);
+  if (*at + n >= cap) return false;
+  memcpy(dst + *at, s, n);
+  *at += n;
+  dst[*at] = '\0';
+  return true;
+}
+
 static void sendInit() {
-  // No uplink format is requested here on purpose. user_input_audio_format
-  // lives in the agent's conversation_config.asr, and the client-side
-  // conversation_config_override schema only exposes agent/tts/conversation —
-  // an unrecognised override key is answered with override_error and a 1008
-  // close. So the format is negotiated: whatever comes back in
-  // conversation_initiation_metadata picks the encoder.
-  sendJson("{\"type\":\"conversation_initiation_client_data\"}");
-  logf("sent initiation\n");
+  // Continuity: reinject prior turns as one dynamic_variable. The init JSON is
+  // escaped into PSRAM (txJsonBuf) so internal DRAM is not hit by a large String.
+  const char *text = (talkCtx.text && talkCtx.len) ? talkCtx.text : "";
+  const size_t textLen = talkCtx.len;
+  const bool hasCtx = textLen > 0 || talkCtx.conversationId[0];
+
+  // Worst case ~6x expand for \uXXXX; budget in PSRAM.
+  const size_t need = 512 + textLen * 6;
+  if (!ensureTxJson(need < 4096 ? 4096 : need)) {
+    logf("init OOM need=%u\n", (unsigned)need);
+    return;
+  }
+
+  size_t at = 0;
+  if (!appendLit(txJsonBuf, txJsonCap, &at,
+                 "{\"type\":\"conversation_initiation_client_data\","
+                 "\"user_id\":\"chitram\"")) {
+    logf("init build fail (head)\n");
+    return;
+  }
+
+  if (hasCtx) {
+    if (!appendLit(txJsonBuf, txJsonCap, &at, ",\"dynamic_variables\":{")) {
+      logf("init build fail (vars)\n");
+      return;
+    }
+    bool first = true;
+    if (textLen > 0) {
+      if (!appendLit(txJsonBuf, txJsonCap, &at,
+                     "\"has_conversation_context\":\"true\","
+                     "\"conversation_context\":\""))
+        return;
+      const size_t next =
+          jsonEscapeAppend(txJsonBuf, txJsonCap, at, text, textLen);
+      if (next == (size_t)-1) {
+        logf("init escape fail\n");
+        return;
+      }
+      at = next;
+      if (!appendLit(txJsonBuf, txJsonCap, &at, "\"")) return;
+      first = false;
+
+      logf("init continue len=%u prev=%s\n", (unsigned)textLen,
+           talkCtx.conversationId[0] ? talkCtx.conversationId : "-");
+      char preview[96];
+      size_t p = 0;
+      for (; p + 1 < sizeof(preview) && p < textLen && text[p] != '\n'; p++) {
+        preview[p] = text[p];
+      }
+      preview[p] = '\0';
+      logf("init context head: %s%s\n", preview, textLen > p ? "…" : "");
+    }
+    if (talkCtx.conversationId[0]) {
+      if (!first && !appendLit(txJsonBuf, txJsonCap, &at, ",")) return;
+      if (!appendLit(txJsonBuf, txJsonCap, &at,
+                     "\"previous_conversation_id\":\""))
+        return;
+      const size_t next =
+          jsonEscapeAppend(txJsonBuf, txJsonCap, at, talkCtx.conversationId,
+                           strlen(talkCtx.conversationId));
+      if (next == (size_t)-1) return;
+      at = next;
+      if (!appendLit(txJsonBuf, txJsonCap, &at, "\"")) return;
+      if (textLen == 0) {
+        logf("init continue len=0 prev=%s\n", talkCtx.conversationId);
+      }
+    }
+    if (!appendLit(txJsonBuf, txJsonCap, &at, "}")) return;
+  } else {
+    logf("init fresh\n");
+  }
+  if (!appendLit(txJsonBuf, txJsonCap, &at, "}")) return;
+  sendJson(txJsonBuf);
+  logf("sent initiation bytes=%u (psram)\n", (unsigned)at);
 }
 
 static void sendPong(int eventId) {
@@ -531,6 +684,12 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
 
   if (!strcmp(type, "conversation_initiation_metadata")) {
     JsonObject ev = doc["conversation_initiation_metadata_event"];
+    const char *cid = ev["conversation_id"] | "";
+    if (cid[0]) {
+      copyTrunc(talkCtx.conversationId, sizeof(talkCtx.conversationId), cid);
+      contextDirty = true;
+      logf("conversation_id=%s\n", talkCtx.conversationId);
+    }
     const char *outFmt = ev["agent_output_audio_format"] | "pcm_16000";
     const char *inFmt = ev["user_input_audio_format"] | "pcm_16000";
     agentOutRate = parseRate(outFmt);
@@ -558,10 +717,16 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
   } else if (!strcmp(type, "user_transcript")) {
     const char *t = doc["user_transcription_event"]["user_transcript"] | "";
     copyTrunc(lastUserBuf, sizeof(lastUserBuf), t);
+    talkContextAppend(&talkCtx, TalkTurnRole::User, t);
+    contextDirty = true;
+    persistContext();
     logf("you: %s\n", t);
   } else if (!strcmp(type, "agent_response")) {
     const char *t = doc["agent_response_event"]["agent_response"] | "";
     copyTrunc(lastReplyBuf, sizeof(lastReplyBuf), t);
+    talkContextAppend(&talkCtx, TalkTurnRole::Agent, t);
+    contextDirty = true;
+    persistContext();
     setStatus("Speaking");
     logf("agent: %s\n", t);
   } else if (!strcmp(type, "interruption")) {
@@ -764,13 +929,29 @@ int talkAgentFetchList(TalkAgentInfo *out, int maxCount, bool *hasMore,
 }
 
 bool talkAgentStart(AppHost *host, const char *agentId) {
-  (void)host;
   if (agentActive) return true;
 
+  sessionHost = host;
   if (agentId && agentId[0]) {
     copyTrunc(activeAgentId, sizeof(activeAgentId), agentId);
   } else {
     activeAgentId[0] = 0;
+  }
+
+  talkContextReset(&talkCtx);
+  contextDirty = false;
+  {
+    Storage *st = sessionStorage();
+    const char *aid = sessionAgentId();
+    if (st && st->ready() && aid && aid[0] &&
+        talkContextLoad(st, aid, &talkCtx)) {
+      logf("context loaded prev=%s len=%u\n",
+           talkCtx.conversationId[0] ? talkCtx.conversationId : "-",
+           (unsigned)talkCtx.len);
+    } else {
+      logf("context none (sd=%d agent=%s)\n",
+           (st && st->ready()) ? 1 : 0, aid && aid[0] ? aid : "-");
+    }
   }
 
   setStatus("Wi-Fi...");
@@ -879,6 +1060,7 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
 void talkAgentStop() {
   pendingInit = false;
   pendingPong = false;
+  persistContext();
   stopAudioTask();
   stopWsTask();
   if (ws.isConnected()) ws.disconnect();
@@ -886,6 +1068,7 @@ void talkAgentStop() {
   agentReady = false;
   talkAudioStop();
   talkToolsReset();
+  sessionHost = nullptr;
   setStatus("Idle");
   logf("talk stopped\n");
 }
