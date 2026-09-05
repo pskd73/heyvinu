@@ -1,0 +1,19 @@
+---
+description: User-facing UI copy must not end with a period or ellipsis
+alwaysApply: true
+---
+
+# UI copy — no trailing period
+
+Do not end user-facing strings with a period (`.`), ellipsis (`…` / `...`), or similar trailing punctuation.
+
+Applies to toasts, status lines, button labels, settings titles/descriptions, nav titles, and other on-device copy.
+
+```text
+❌ Generating image…
+❌ Cleared context.
+✅ Generating image
+✅ Cleared context
+```
+
+Exceptions: full sentences in long-form help/docs only if the product already uses them; default for chitram UI is short labels without a closing period.

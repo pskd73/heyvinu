@@ -91,7 +91,7 @@ bool voiceImageToolStart(const char *toolCallId, JsonObjectConst params,
                 imageGenProvider() == ImageProvider::OpenRouter ? "openrouter"
                                                                 : "elevenlabs");
   if (host_) {
-    host_->showToast("Generating image…", ToastKind::Info, 2500);
+    host_->showToast("Generating image", ToastKind::Info, 2500);
   }
   return true;
 }
