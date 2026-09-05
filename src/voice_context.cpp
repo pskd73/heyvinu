@@ -1,4 +1,4 @@
-#include "talk_context.h"
+#include "voice_context.h"
 
 #include <Flow32.h>
 
@@ -49,8 +49,8 @@ bool ensureDirs(Storage *storage) {
   return true;
 }
 
-const char *roleLabel(TalkTurnRole role) {
-  return role == TalkTurnRole::User ? "User: " : "Agent: ";
+const char *roleLabel(VoiceTurnRole role) {
+  return role == VoiceTurnRole::User ? "User: " : "Agent: ";
 }
 
 /** Append `piece` into rolling buffer; drop oldest bytes (prefer newline). */
@@ -86,17 +86,17 @@ void appendRolling(char *buf, size_t cap, size_t *lenInOut, const char *piece,
 
 } // namespace
 
-bool talkContextEnsure(TalkContext *state) {
+bool voiceContextEnsure(VoiceContext *state) {
   if (!state) return false;
   if (state->text) return true;
-  state->text = (char *)psramOrRam(kTalkContextCap);
+  state->text = (char *)psramOrRam(kVoiceContextCap);
   if (!state->text) return false;
   state->text[0] = '\0';
   state->len = 0;
   return true;
 }
 
-void talkContextReset(TalkContext *state) {
+void voiceContextReset(VoiceContext *state) {
   if (!state) return;
   state->conversationId[0] = '\0';
   state->updatedMs = 0;
@@ -104,19 +104,19 @@ void talkContextReset(TalkContext *state) {
   if (state->text) state->text[0] = '\0';
 }
 
-void talkContextFree(TalkContext *state) {
+void voiceContextFree(VoiceContext *state) {
   if (!state) return;
   if (state->text) {
     heap_caps_free(state->text);
     state->text = nullptr;
   }
-  talkContextReset(state);
+  voiceContextReset(state);
 }
 
-void talkContextAppend(TalkContext *state, TalkTurnRole role,
+void voiceContextAppend(VoiceContext *state, VoiceTurnRole role,
                        const char *text) {
   if (!state || !text || !text[0]) return;
-  if (!talkContextEnsure(state)) return;
+  if (!voiceContextEnsure(state)) return;
 
   const char *label = roleLabel(role);
   const size_t labelLen = strlen(label);
@@ -138,19 +138,19 @@ void talkContextAppend(TalkContext *state, TalkTurnRole role,
     memcpy(stackTurn + labelLen, text, bodyLen);
     stackTurn[labelLen + bodyLen] = '\n';
     stackTurn[labelLen + bodyLen + 1] = '\0';
-    appendRolling(state->text, kTalkContextCap, &state->len, stackTurn, need);
+    appendRolling(state->text, kVoiceContextCap, &state->len, stackTurn, need);
     return;
   }
 
-  appendRolling(state->text, kTalkContextCap, &state->len, label, labelLen);
-  appendRolling(state->text, kTalkContextCap, &state->len, text, bodyLen);
-  appendRolling(state->text, kTalkContextCap, &state->len, "\n", 1);
+  appendRolling(state->text, kVoiceContextCap, &state->len, label, labelLen);
+  appendRolling(state->text, kVoiceContextCap, &state->len, text, bodyLen);
+  appendRolling(state->text, kVoiceContextCap, &state->len, "\n", 1);
 }
 
-bool talkContextLoad(Storage *storage, const char *agentId, TalkContext *out) {
+bool voiceContextLoad(Storage *storage, const char *agentId, VoiceContext *out) {
   if (!out) return false;
-  if (!talkContextEnsure(out)) return false;
-  talkContextReset(out);
+  if (!voiceContextEnsure(out)) return false;
+  voiceContextReset(out);
 
   char base[96];
   if (!contextBase(storage, agentId, base, sizeof(base))) return false;
@@ -176,7 +176,7 @@ bool talkContextLoad(Storage *storage, const char *agentId, TalkContext *out) {
     }
     File tf = storage->open(textPath, FILE_READ);
     if (!tf) return out->conversationId[0] != '\0';
-    size_t n = tf.readBytes(out->text, kTalkContextCap - 1);
+    size_t n = tf.readBytes(out->text, kVoiceContextCap - 1);
     tf.close();
     out->text[n] = '\0';
     out->len = n;
@@ -188,7 +188,7 @@ bool talkContextLoad(Storage *storage, const char *agentId, TalkContext *out) {
   File f = storage->open(metaPath, FILE_READ);
   if (!f) return false;
   const size_t sz = f.size();
-  if (sz == 0 || sz > kTalkContextCap + 1024) {
+  if (sz == 0 || sz > kVoiceContextCap + 1024) {
     f.close();
     return false;
   }
@@ -211,7 +211,7 @@ bool talkContextLoad(Storage *storage, const char *agentId, TalkContext *out) {
   if (!ctx[0]) ctx = doc["progress"] | "";
   strncpy(out->conversationId, cid, sizeof(out->conversationId) - 1);
   const size_t n = strlen(ctx);
-  const size_t copy = n < kTalkContextCap - 1 ? n : kTalkContextCap - 1;
+  const size_t copy = n < kVoiceContextCap - 1 ? n : kVoiceContextCap - 1;
   memcpy(out->text, ctx, copy);
   out->text[copy] = '\0';
   out->len = copy;
@@ -219,8 +219,8 @@ bool talkContextLoad(Storage *storage, const char *agentId, TalkContext *out) {
   return out->conversationId[0] || out->len > 0;
 }
 
-bool talkContextSave(Storage *storage, const char *agentId,
-                     const TalkContext &state) {
+bool voiceContextSave(Storage *storage, const char *agentId,
+                     const VoiceContext &state) {
   if (!state.conversationId[0] && state.len == 0) return false;
   if (!state.text && state.len > 0) return false;
   if (!ensureDirs(storage)) return false;
@@ -253,7 +253,7 @@ bool talkContextSave(Storage *storage, const char *agentId,
   return state.len == 0 || n == state.len;
 }
 
-bool talkContextClear(Storage *storage, const char *agentId) {
+bool voiceContextClear(Storage *storage, const char *agentId) {
   if (!storage || !storage->ready()) return false;
   char base[96];
   if (!contextBase(storage, agentId, base, sizeof(base))) return false;
@@ -268,7 +268,7 @@ bool talkContextClear(Storage *storage, const char *agentId) {
   return ok;
 }
 
-int talkContextList(Storage *storage, char *names, size_t nameLen,
+int voiceContextList(Storage *storage, char *names, size_t nameLen,
                     int maxCount) {
   if (!storage || !storage->ready() || !names || nameLen < 2 || maxCount < 1) {
     return 0;
@@ -300,4 +300,81 @@ int talkContextList(Storage *storage, char *names, size_t nameLen,
     f = dir.openNextFile();
   }
   return n;
+}
+
+size_t voiceContextRecentText(const VoiceContext &state, char *out, size_t outCap,
+                              size_t maxChars) {
+  if (!out || outCap < 2) return 0;
+  out[0] = '\0';
+  if (!state.text || state.len == 0 || maxChars == 0) return 0;
+
+  const char *full = state.text;
+  size_t fullLen = state.len;
+  const char *text = full;
+  size_t textLen = fullLen;
+  if (textLen > maxChars) {
+    size_t off = textLen - maxChars;
+    while (off < textLen && full[off] != '\n') off++;
+    if (off < textLen && full[off] == '\n') off++;
+    text = full + off;
+    textLen = textLen - off;
+  }
+  if (textLen + 1 > outCap) textLen = outCap - 1;
+  memcpy(out, text, textLen);
+  out[textLen] = '\0';
+  return textLen;
+}
+
+size_t voiceContextFillDgHistory(const VoiceContext &state, JsonArray messages,
+                                 size_t maxChars) {
+  if (!state.text || state.len == 0 || maxChars == 0) return 0;
+
+  // Work on the recent window only (same budget as EL inject).
+  char scratch[kVoiceContextInjectMax + 4];
+  const size_t n =
+      voiceContextRecentText(state, scratch, sizeof(scratch), maxChars);
+  if (!n) return 0;
+
+  size_t added = 0;
+  size_t i = 0;
+  while (i < n) {
+    size_t lineStart = i;
+    while (i < n && scratch[i] != '\n') i++;
+    size_t lineLen = i - lineStart;
+    if (i < n && scratch[i] == '\n') i++;
+    if (lineLen == 0) continue;
+
+    const char *line = scratch + lineStart;
+    const char *role = nullptr;
+    const char *content = nullptr;
+    size_t contentLen = 0;
+    if (lineLen >= 6 && strncmp(line, "User: ", 6) == 0) {
+      role = "user";
+      content = line + 6;
+      contentLen = lineLen - 6;
+    } else if (lineLen >= 7 && strncmp(line, "Agent: ", 7) == 0) {
+      role = "assistant";
+      content = line + 7;
+      contentLen = lineLen - 7;
+    } else {
+      continue;
+    }
+    while (contentLen > 0 &&
+           (content[contentLen - 1] == '\r' || content[contentLen - 1] == ' ')) {
+      contentLen--;
+    }
+    if (!contentLen) continue;
+
+    JsonObject msg = messages.add<JsonObject>();
+    msg["type"] = "History";
+    msg["role"] = role;
+    // ArduinoJson needs a temporary null-terminated string for content.
+    char turn[256];
+    if (contentLen >= sizeof(turn)) contentLen = sizeof(turn) - 1;
+    memcpy(turn, content, contentLen);
+    turn[contentLen] = '\0';
+    msg["content"] = turn;
+    added++;
+  }
+  return added;
 }

@@ -41,6 +41,31 @@ def patch_websockets(source, target, env):
 
     hdr.write_text(h)
 
+    # Deepgram Voice Agent returns 404 if Host includes :443 (STT tolerates it).
+    # RFC 7230: omit default port from Host.
+    client_cpp = root / "src" / "WebSocketsClient.cpp"
+    if client_cpp.exists():
+        cc = client_cpp.read_text()
+        old_host = (
+            '    handshake += _host + ":" + _port + NEW_LINE;'
+        )
+        new_host = (
+            "    handshake += _host;\n"
+            "    // Omit default ports — some APIs (Deepgram Agent) 404 on Host:host:443.\n"
+            "    if(!((_client.isSSL && _port == 443) || (!_client.isSSL && _port == 80))) {\n"
+            '        handshake += ":" + String(_port);\n'
+            "    }\n"
+            "    handshake += NEW_LINE;"
+        )
+        if "Omit default ports" not in cc and old_host in cc:
+            cc = cc.replace(old_host, new_host)
+            client_cpp.write_text(cc)
+            print("patch_websockets: Host omits default :443/:80")
+        elif "Omit default ports" in cc:
+            print("patch_websockets: Host port omit already patched")
+        else:
+            print("patch_websockets: WARN Host header pattern not found")
+
     if not cpp.exists():
         return
 

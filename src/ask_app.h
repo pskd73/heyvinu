@@ -2,7 +2,8 @@
 
 #include <Flow32.h>
 
-#include "talk_agent.h"
+#include "elevenlabs_agent.h"
+#include "voice_agent.h"
 
 struct AskState {
   static constexpr uint32_t kMagic = 0x41534B31u; // 'ASK1'
@@ -14,11 +15,10 @@ struct AskState {
 };
 
 /**
- * ElevenLabs ConvAI voice agent (chitram Talk).
+ * Voice Ask — ElevenLabs ConvAI or Deepgram Voice Agent (Config::VoiceProvider).
  *
- * Opens on the account's agent list and pushes the live conversation once one
- * is chosen, so the device follows whatever exists in ElevenLabs rather than
- * the single agent id baked into config.
+ * ElevenLabs: agent list → live conversation.
+ * Deepgram: opens the live session directly (no ConvAI agent picker).
  */
 class AskApp : public App<AskState> {
 public:
@@ -67,7 +67,7 @@ private:
   static constexpr uint32_t kUiMinMs = 200;
 
   // --- Agent list ---
-  TalkAgentInfo agents_[kMaxAgents] = {};
+  ElAgentInfo agents_[kMaxAgents] = {};
   int agentCount_ = 0;
   bool agentsMore_ = false;
   bool pendingFetch_ = false;

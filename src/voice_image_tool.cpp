@@ -1,7 +1,7 @@
-#include "talk_image_tool.h"
+#include "voice_image_tool.h"
 
 #include "image_gen.h"
-#include "talk_tools.h"
+#include "voice_tools.h"
 
 #include <Flow32.h>
 
@@ -11,13 +11,14 @@
 namespace {
 
 Storage *storage_ = nullptr;
+AppHost *host_ = nullptr;
 char pendingCallId_[64] = {};
 bool pending_ = false;
 
 bool toolGenerateImage(JsonObjectConst params, char *resultOut,
                        size_t resultLen) {
-  // Sync entry is unused — talk_agent routes generate_image through
-  // talkImageToolStart so the call id is available for the async result.
+  // Sync entry is unused — the agent routes generate_image through
+  // voiceImageToolStart so the call id is available for the async result.
   (void)params;
   snprintf(resultOut, resultLen, "use async path");
   return false;
@@ -25,19 +26,22 @@ bool toolGenerateImage(JsonObjectConst params, char *resultOut,
 
 } // namespace
 
-void talkImageToolReset() {
+void voiceImageToolReset() {
   pending_ = false;
   pendingCallId_[0] = '\0';
+  host_ = nullptr;
   imageGenReset();
 }
 
-void talkImageToolSetStorage(Storage *storage) { storage_ = storage; }
+void voiceImageToolSetStorage(Storage *storage) { storage_ = storage; }
 
-void talkImageToolRegister() {
-  talkToolsRegister("generate_image", toolGenerateImage);
+void voiceImageToolSetHost(AppHost *host) { host_ = host; }
+
+void voiceImageToolRegister() {
+  voiceToolsRegister("generate_image", toolGenerateImage);
 }
 
-bool talkImageToolStart(const char *toolCallId, JsonObjectConst params,
+bool voiceImageToolStart(const char *toolCallId, JsonObjectConst params,
                         char *resultOut, size_t resultLen, bool *pending) {
   if (pending) *pending = false;
   if (resultOut && resultLen) resultOut[0] = '\0';
@@ -86,10 +90,13 @@ bool talkImageToolStart(const char *toolCallId, JsonObjectConst params,
                 pendingCallId_,
                 imageGenProvider() == ImageProvider::OpenRouter ? "openrouter"
                                                                 : "elevenlabs");
+  if (host_) {
+    host_->showToast("Generating image…", ToastKind::Info, 2500);
+  }
   return true;
 }
 
-bool talkImageToolTakeResult(char *callIdOut, size_t callIdLen,
+bool voiceImageToolTakeResult(char *callIdOut, size_t callIdLen,
                              char *resultOut, size_t resultLen, bool *isError) {
   if (!pending_) return false;
   ImageGenResult r{};

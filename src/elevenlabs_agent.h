@@ -7,7 +7,7 @@
 class AppHost;
 
 /** One agent from the account listing, trimmed to what the picker shows. */
-struct TalkAgentInfo {
+struct ElAgentInfo {
   char id[48];
   char name[40];
 };
@@ -17,16 +17,16 @@ struct TalkAgentInfo {
  * -1 with a short reason in `errOut`. `hasMore` reports that the account has
  * agents beyond `maxCount`.
  */
-int talkAgentFetchList(TalkAgentInfo *out, int maxCount, bool *hasMore,
+int elAgentFetchList(ElAgentInfo *out, int maxCount, bool *hasMore,
                        char *errOut, size_t errLen);
 
 /** `agentId` null or empty falls back to the configured default. */
-bool talkAgentStart(AppHost *host = nullptr, const char *agentId = nullptr);
-void talkAgentLoop();
-void talkAgentStop();
-bool talkAgentIsActive();
-bool talkAgentIsReady();
-bool talkAgentIsSpeaking();
+bool elAgentStart(AppHost *host = nullptr, const char *agentId = nullptr);
+void elAgentLoop();
+void elAgentStop();
+bool elAgentIsActive();
+bool elAgentIsReady();
+bool elAgentIsSpeaking();
 
 /**
  * Select: mute agent playback and wait for ElevenLabs barge-in.
@@ -34,10 +34,10 @@ bool talkAgentIsSpeaking();
  * sends `interruption` when it hears you; that is the official interrupt path.
  * (`user_activity` is not used; it does not cancel in-flight TTS.)
  */
-void talkAgentUserActivity();
+void elAgentUserActivity();
 
-float talkAgentPlayLevel();
-int talkAgentWaveBars(uint8_t *out, int maxBars);
+float elAgentPlayLevel();
+int elAgentWaveBars(uint8_t *out, int maxBars);
 
 /**
  * Transport health of a live session, for an at-a-glance indicator.
@@ -47,7 +47,7 @@ int talkAgentWaveBars(uint8_t *out, int maxBars);
  * "Listening" right up until the socket dies. Lifecycle (never started vs.
  * dropped) stays with the caller, which already tracks it.
  */
-enum class TalkHealth : uint8_t {
+enum class ElHealth : uint8_t {
   Offline,    // no session running
   Connecting, // socket up, format metadata not exchanged yet
   Ok,
@@ -55,8 +55,8 @@ enum class TalkHealth : uint8_t {
   Stuck,    // uplink wedged; the session dies if this holds
 };
 
-TalkHealth talkAgentHealth();
+ElHealth elAgentHealth();
 
-const char *talkAgentStatus();
-const char *talkAgentLastUser();
-const char *talkAgentLastReply();
+const char *elAgentStatus();
+const char *elAgentLastUser();
+const char *elAgentLastReply();

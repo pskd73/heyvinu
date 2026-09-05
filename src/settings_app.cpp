@@ -1,6 +1,7 @@
 #include "settings_app.h"
 
-#include "talk_context.h"
+#include "runtime_config.h"
+#include "voice_context.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -42,6 +43,19 @@ void SettingsApp::onVisualiseChange(UIToggle &t) {
   Serial.printf("Settings: visualise=%d\n", t.checked() ? 1 : 0);
 }
 
+void SettingsApp::onVoiceProviderSelect(UISelect &s) {
+  if (!self_) return;
+  const char *v = (s.selected() == 1) ? "deepgram" : "elevenlabs";
+  setConfig(Config::VoiceProvider, v);
+  Serial.printf("Settings: voice_provider=%s\n", v);
+  if (self_->host()) {
+    char toast[40];
+    snprintf(toast, sizeof(toast), "Voice: %s",
+             s.selected() == 1 ? "Deepgram" : "ElevenLabs");
+    self_->host()->showToast(toast, ToastKind::Success);
+  }
+}
+
 void SettingsApp::onMainMenu(UISelect &s) {
   if (!self_) return;
   if (s.selectedValue() == kPageClearContext) {
@@ -58,7 +72,7 @@ void SettingsApp::onClearContextSelect(UISelect &s) {
 
   Storage *st = self_->host() ? self_->host()->storage() : nullptr;
   const char *id = self_->contextNames_[idx];
-  const bool ok = talkContextClear(st, id);
+  const bool ok = voiceContextClear(st, id);
   Serial.printf("Settings: clear context %s %s\n", id, ok ? "ok" : "fail");
 
   char toast[48];
@@ -79,13 +93,25 @@ void SettingsApp::refreshContextList() {
     contextNames_[i][0] = '\0';
   }
   Storage *st = host() ? host()->storage() : nullptr;
-  contextCount_ = talkContextList(st, &contextNames_[0][0], kContextNameLen,
+  contextCount_ = voiceContextList(st, &contextNames_[0][0], kContextNameLen,
                                   kMaxContexts);
 }
 
 void SettingsApp::buildMain(Page &page) {
   const SettingsState &st = state();
   const Theme::ThemeTokens &th = Theme::active();
+  const uint16_t muted = Theme::lerp(th.baseContent, th.base100, 0.4f);
+  const char *vp = getConfig(Config::VoiceProvider);
+  const int16_t voiceSel =
+      (vp && (strcmp(vp, "deepgram") == 0 || strcmp(vp, "dg") == 0)) ? 1 : 0;
+
+  auto sectionLabel = [&](const char *label) -> UIText & {
+    return page.text(label).style(Style()
+                                      .setWidth(Length::Pct(100))
+                                      .setFont(FontRole::Small)
+                                      .setColor(muted)
+                                      .setAlign(Align::Start));
+  };
 
   auto &chooser =
       page.select()
@@ -101,6 +127,22 @@ void SettingsApp::buildMain(Page &page) {
                    .icon("snowflake")
                    .title("Winter")
                    .description("Cool light surfaces")
+                   .value(1));
+
+  auto &voiceChooser =
+      page.select()
+          .selected(voiceSel)
+          .onChange(onVoiceProviderSelect)
+          .style(Style().setWidth(Length::Pct(100)).setGap(6))
+          .add(page.selectOption()
+                   .icon("mic")
+                   .title("ElevenLabs")
+                   .description("ConvAI voice agent")
+                   .value(0))
+          .add(page.selectOption()
+                   .icon("radio")
+                   .title("Deepgram")
+                   .description("Voice Agent (Aura + Flux)")
                    .value(1));
 
   auto &vizRow =
@@ -140,9 +182,22 @@ void SettingsApp::buildMain(Page &page) {
                           .setPadding(Edges(16, 12))
                           .setGap(14)
                           .setColumns(1))
-               .add(chooser)
-               .add(vizRow)
-               .add(tools));
+               .add(page.div()
+                        .style(Style()
+                                   .setWidth(Length::Pct(100))
+                                   .setGap(6)
+                                   .setColumns(1))
+                        .add(sectionLabel("THEME"))
+                        .add(chooser))
+               .add(page.div()
+                        .style(Style()
+                                   .setWidth(Length::Pct(100))
+                                   .setGap(6)
+                                   .setColumns(1))
+                        .add(sectionLabel("AI"))
+                        .add(voiceChooser)
+                        .add(vizRow)
+                        .add(tools)));
 }
 
 void SettingsApp::buildClearContext(Page &page) {

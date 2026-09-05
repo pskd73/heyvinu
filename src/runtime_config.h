@@ -15,6 +15,8 @@ enum Key : uint8_t {
   ElevenlabsAgentId,
   /** `openrouter` (forced for now) or `elevenlabs` — image gen backend. */
   ImageProvider,
+  /** `elevenlabs` | `deepgram` — live voice session backend. */
+  VoiceProvider,
   Count,
 };
 

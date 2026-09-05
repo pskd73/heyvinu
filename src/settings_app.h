@@ -7,6 +7,7 @@
 
 /**
  * System settings — theme + Visualise in NVS-backed state.
+ * Voice provider is Config::VoiceProvider (runtime NVS), edited here.
  * Volume lives in the same blob for boot restore; Talk adjusts it live.
  */
 struct SettingsState {
@@ -204,6 +205,7 @@ private:
 
   static void onThemeSelect(UISelect &s);
   static void onVisualiseChange(UIToggle &t);
+  static void onVoiceProviderSelect(UISelect &s);
   static void onMainMenu(UISelect &s);
   static void onClearContextSelect(UISelect &s);
 };

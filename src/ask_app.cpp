@@ -3,8 +3,8 @@
 #include "audio_volume.h"
 #include "image_gen.h"
 #include "image_preview.h"
-#include "talk_agent.h"
-#include "talk_tools.h"
+#include "elevenlabs_agent.h"
+#include "voice_tools.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -52,7 +52,11 @@ void AskApp::onOpen() {
   listFocusPending_ = false;
   pendingFetch_ = true;
   warmupFrames_ = 1;
-  snprintf(statusLine_, sizeof(statusLine_), "Loading agents...");
+  if (voiceSupportsAgentPicker()) {
+    snprintf(statusLine_, sizeof(statusLine_), "Loading agents...");
+  } else {
+    snprintf(statusLine_, sizeof(statusLine_), "Starting…");
+  }
   // Flags only — onClose already tore down any previous session, and calling
   // stop here would log a spurious teardown on every open.
   resetTalkState();
@@ -90,7 +94,7 @@ bool AskApp::handleKey(UIEvent &e) {
     // Press: mute agent locally and listen. Real interrupt is voice barge-in
     // (mic uplink → ElevenLabs `interruption`). I2S stays up.
     if (e.phase == UIKeyPhase::Down && started_ && !failed_) {
-      talkAgentUserActivity();
+      voiceUserActivity();
     }
     return true;
   }
@@ -135,7 +139,7 @@ void AskApp::build(Page &page, uint8_t pageId) {
 void AskApp::runAgentFetch() {
   char err[48] = {};
   bool more = false;
-  const int n = talkAgentFetchList(agents_, kMaxAgents, &more, err, sizeof(err));
+  const int n = elAgentFetchList(agents_, kMaxAgents, &more, err, sizeof(err));
 
   if (n < 0) {
     snprintf(statusLine_, sizeof(statusLine_), "%s",
@@ -172,6 +176,21 @@ void AskApp::onStatusTick(UINode &node, float dt) {
   }
 
   self->pendingFetch_ = false;
+
+  if (!voiceSupportsAgentPicker()) {
+    // Deepgram (and any non-picker provider): skip ConvAI agent list.
+    snprintf(self->agentId_, sizeof(self->agentId_), "%s", "deepgram");
+    snprintf(self->talkTitle_, sizeof(self->talkTitle_), "%s", "Deepgram");
+    snprintf(self->talkLine_, sizeof(self->talkLine_), "Connecting...");
+    self->toolLine_[0] = ' ';
+    self->toolLine_[1] = '\0';
+    self->toolTextGen_ = voiceToolsTextGen();
+    self->pendingStart_ = true;
+    self->warmupFrames_ = 1;
+    self->goTo(kPageTalk, NavMode::Replace);
+    return;
+  }
+
   self->runAgentFetch();
   if (self->pageId() != kPageStatus) {
     return; // moved on to the list; that page rebuilds next frame
@@ -261,7 +280,7 @@ void AskApp::openTalk(int index) {
   snprintf(talkLine_, sizeof(talkLine_), "Connecting...");
   toolLine_[0] = ' ';
   toolLine_[1] = '\0';
-  toolTextGen_ = talkToolsTextGen();
+  toolTextGen_ = voiceToolsTextGen();
   volumeDirty_ = false;
   started_ = false;
   failed_ = false;
@@ -295,7 +314,7 @@ void AskApp::resetTalkState() {
 void AskApp::leaveTalk() {
   resetTalkState();
   imagePreviewClear();
-  talkAgentStop();
+  voiceStop();
 }
 
 void AskApp::clearSessionImages() {
@@ -472,15 +491,16 @@ uint16_t AskApp::healthColor() const {
   if (pendingStart_ || !started_) {
     return Theme::lerp(th.baseContent, th.base100, 0.4f);
   }
-  switch (talkAgentHealth()) {
-  case TalkHealth::Ok:
+  switch (voiceProvider() == VoiceProvider::ElevenLabs ? elAgentHealth()
+                                                       : ElHealth::Ok) {
+  case ElHealth::Ok:
     return th.success;
-  case TalkHealth::Degraded:
+  case ElHealth::Degraded:
     return th.warning;
-  case TalkHealth::Connecting:
+  case ElHealth::Connecting:
     return th.info;
-  case TalkHealth::Stuck:
-  case TalkHealth::Offline:
+  case ElHealth::Stuck:
+  case ElHealth::Offline:
   default:
     return th.error;
   }
@@ -493,7 +513,7 @@ void AskApp::formatTalkStatus() {
   } else if (pendingStart_ || !started_) {
     snprintf(talkLine_, sizeof(talkLine_), "Connecting...");
   } else {
-    snprintf(talkLine_, sizeof(talkLine_), "%s", talkAgentStatus());
+    snprintf(talkLine_, sizeof(talkLine_), "%s", voiceStatus());
   }
 }
 
@@ -510,9 +530,12 @@ void AskApp::onTalkTick(UINode &node, float dt) {
       return;
     }
     self->pendingStart_ = false;
-    if (!talkAgentStart(self->host(), self->agentId_)) {
+    VoiceStartOpts opts;
+    opts.host = self->host();
+    opts.agentId = self->agentId_;
+    if (!voiceStart(opts)) {
       self->failed_ = true;
-      snprintf(self->errMsg_, sizeof(self->errMsg_), "%s", talkAgentStatus());
+      snprintf(self->errMsg_, sizeof(self->errMsg_), "%s", voiceStatus());
     } else {
       self->started_ = true;
     }
@@ -521,25 +544,25 @@ void AskApp::onTalkTick(UINode &node, float dt) {
     return;
   }
 
-  talkAgentLoop();
+  voiceLoop();
 
   self->runPendingGalleryLoad();
 
-  if (self->started_ && !self->failed_ && !talkAgentIsActive()) {
+  if (self->started_ && !self->failed_ && !voiceActive()) {
     self->failed_ = true;
-    snprintf(self->errMsg_, sizeof(self->errMsg_), "%s", talkAgentStatus());
+    snprintf(self->errMsg_, sizeof(self->errMsg_), "%s", voiceStatus());
   }
 
   const uint32_t now = millis();
 
-  const uint32_t toolGen = talkToolsTextGen();
+  const uint32_t toolGen = voiceToolsTextGen();
   const uint32_t previewGen = imagePreviewGen();
   const bool toolChanged = toolGen != self->toolTextGen_;
   const bool previewChanged = previewGen != self->previewGen_;
   if (toolChanged) {
     self->toolTextGen_ = toolGen;
     snprintf(self->toolLine_, sizeof(self->toolLine_), "%s",
-             talkToolsLastText());
+             voiceToolsLastText());
     if (!self->toolLine_[0]) {
       self->toolLine_[0] = ' ';
       self->toolLine_[1] = '\0';

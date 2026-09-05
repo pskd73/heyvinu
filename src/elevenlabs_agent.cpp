@@ -1,10 +1,10 @@
-#include "talk_agent.h"
+#include "elevenlabs_agent.h"
 #include "talk_aec.h"
 #include "talk_audio.h"
 #include "talk_config.h"
-#include "talk_context.h"
-#include "talk_image_tool.h"
-#include "talk_tools.h"
+#include "voice_context.h"
+#include "voice_image_tool.h"
+#include "voice_tools.h"
 #include "settings_app.h"
 #include "talk_ulaw.h"
 #include "net_wifi.h"
@@ -54,7 +54,7 @@ static char signedPath[768];
 static char activeAgentId[48];
 
 static AppHost *sessionHost = nullptr;
-static TalkContext talkCtx{};
+static VoiceContext talkCtx{};
 static bool contextDirty = false;
 /** True if the last initiation included conversation_context. */
 static bool lastInitHadContext = false;
@@ -315,7 +315,7 @@ static void persistContext() {
   const char *aid = sessionAgentId();
   if (!st || !st->ready() || !aid || !aid[0]) return;
   talkCtx.updatedMs = millis();
-  if (talkContextSave(st, aid, talkCtx)) {
+  if (voiceContextSave(st, aid, talkCtx)) {
     contextDirty = false;
     logf("context saved id=%s len=%u\n", talkCtx.conversationId,
          (unsigned)talkCtx.len);
@@ -509,7 +509,7 @@ static void handleClientToolCall(JsonDocument &doc) {
     }
     char result[160];
     bool pending = false;
-    const bool ok = talkImageToolStart(id, params.as<JsonObjectConst>(), result,
+    const bool ok = voiceImageToolStart(id, params.as<JsonObjectConst>(), result,
                                        sizeof(result), &pending);
     logf("tool %s id=%s expects=%d ok=%d pending=%d %s\n", name,
          id[0] ? id : "?", expects ? 1 : 0, ok ? 1 : 0, pending ? 1 : 0,
@@ -519,7 +519,7 @@ static void handleClientToolCall(JsonDocument &doc) {
   }
 
   char result[160];
-  const bool ok = talkToolsDispatch(name, params, result, sizeof(result));
+  const bool ok = voiceToolsDispatch(name, params, result, sizeof(result));
   logf("tool %s id=%s expects=%d ok=%d %s\n", name[0] ? name : "?",
        id[0] ? id : "?", expects ? 1 : 0, ok ? 1 : 0, result);
   if (expects) sendToolResult(id, result, !ok);
@@ -783,14 +783,14 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
   } else if (!strcmp(type, "user_transcript")) {
     const char *t = doc["user_transcription_event"]["user_transcript"] | "";
     copyTrunc(lastUserBuf, sizeof(lastUserBuf), t);
-    talkContextAppend(&talkCtx, TalkTurnRole::User, t);
+    voiceContextAppend(&talkCtx, VoiceTurnRole::User, t);
     contextDirty = true;
     persistContext();
     logf("you: %s\n", t);
   } else if (!strcmp(type, "agent_response")) {
     const char *t = doc["agent_response_event"]["agent_response"] | "";
     copyTrunc(lastReplyBuf, sizeof(lastReplyBuf), t);
-    talkContextAppend(&talkCtx, TalkTurnRole::Agent, t);
+    voiceContextAppend(&talkCtx, VoiceTurnRole::Agent, t);
     contextDirty = true;
     persistContext();
     if (!holdListening) setStatus("Speaking");
@@ -865,8 +865,8 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
       // the continue payload (undeclared dynamic vars / oversized context).
       // Drop saved context so the next Talk start uses init fresh.
       logf("continue init rejected — clearing saved context for next start\n");
-      talkContextClear(sessionStorage(), sessionAgentId());
-      talkContextReset(&talkCtx);
+      voiceContextClear(sessionStorage(), sessionAgentId());
+      voiceContextReset(&talkCtx);
       contextDirty = false;
       lastInitHadContext = false;
       setStatus("Init rejected");
@@ -914,7 +914,7 @@ static void wsTask(void *arg) {
         char callId[64];
         char result[160];
         bool isError = false;
-        if (talkImageToolTakeResult(callId, sizeof(callId), result,
+        if (voiceImageToolTakeResult(callId, sizeof(callId), result,
                                     sizeof(result), &isError)) {
           sendToolResult(callId, result, isError);
           logf("tool generate_image done err=%d %s\n", isError ? 1 : 0, result);
@@ -971,7 +971,7 @@ static void stopWsTask() {
  * needs DMA-capable blocks for TLS. The filter keeps the document to a dozen
  * short strings.
  */
-int talkAgentFetchList(TalkAgentInfo *out, int maxCount, bool *hasMore,
+int elAgentFetchList(ElAgentInfo *out, int maxCount, bool *hasMore,
                        char *errOut, size_t errLen) {
   auto fail = [&](const char *msg) {
     logf("agent list: %s\n", msg);
@@ -1037,7 +1037,7 @@ int talkAgentFetchList(TalkAgentInfo *out, int maxCount, bool *hasMore,
   return n;
 }
 
-bool talkAgentStart(AppHost *host, const char *agentId) {
+bool elAgentStart(AppHost *host, const char *agentId) {
   if (agentActive) return true;
 
   sessionHost = host;
@@ -1047,13 +1047,13 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
     activeAgentId[0] = 0;
   }
 
-  talkContextReset(&talkCtx);
+  voiceContextReset(&talkCtx);
   contextDirty = false;
   {
     Storage *st = sessionStorage();
     const char *aid = sessionAgentId();
     if (st && st->ready() && aid && aid[0] &&
-        talkContextLoad(st, aid, &talkCtx)) {
+        voiceContextLoad(st, aid, &talkCtx)) {
       logf("context loaded prev=%s len=%u\n",
            talkCtx.conversationId[0] ? talkCtx.conversationId : "-",
            (unsigned)talkCtx.len);
@@ -1117,13 +1117,14 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
   talkAudioResetDsp();
   talkAecReset();
   talkUlawReset();
-  talkToolsReset();
-  talkToolsRegisterDefaults();
-  talkImageToolReset();
-  talkImageToolSetStorage(sessionStorage());
+  voiceToolsReset();
+  voiceToolsRegisterDefaults();
+  voiceImageToolReset();
+  voiceImageToolSetStorage(sessionStorage());
+  voiceImageToolSetHost(sessionHost);
   // Always register so the agent can call generate_image and get an immediate
   // "disabled" result when Visualise is off (instead of an unknown tool).
-  talkImageToolRegister();
+  voiceImageToolRegister();
   logf("tools registered (visualise=%d)\n",
        settingsVisualiseEnabled() ? 1 : 0);
   micUplinkClear();
@@ -1176,7 +1177,7 @@ bool talkAgentStart(AppHost *host, const char *agentId) {
   return true;
 }
 
-void talkAgentStop() {
+void elAgentStop() {
   pendingInit = false;
   pendingPong = false;
   holdListening = false;
@@ -1187,18 +1188,18 @@ void talkAgentStop() {
   agentActive = false;
   agentReady = false;
   talkAudioStop();
-  talkToolsReset();
-  talkImageToolReset();
+  voiceToolsReset();
+  voiceImageToolReset();
   sessionHost = nullptr;
   setStatus("Idle");
   logf("talk stopped\n");
 }
 
-bool talkAgentIsActive() { return agentActive; }
-bool talkAgentIsReady() { return agentReady; }
-TalkHealth talkAgentHealth() {
-  if (!agentActive) return TalkHealth::Offline;
-  if (!agentReady) return TalkHealth::Connecting;
+bool elAgentIsActive() { return agentActive; }
+bool elAgentIsReady() { return agentReady; }
+ElHealth elAgentHealth() {
+  if (!agentActive) return ElHealth::Offline;
+  if (!agentReady) return ElHealth::Connecting;
 
   // The uplink is the canary. A healthy send lands every ~32 ms, the slow-send
   // log already fires at 250 ms, and a write that never completes is what
@@ -1212,16 +1213,16 @@ TalkHealth talkAgentHealth() {
 
   if (lastSendOkMs) {
     const uint32_t since = millis() - lastSendOkMs;
-    if (since >= kStuckMs) return TalkHealth::Stuck;
-    if (since >= kDegradedMs) return TalkHealth::Degraded;
+    if (since >= kStuckMs) return ElHealth::Stuck;
+    if (since >= kDegradedMs) return ElHealth::Degraded;
   }
-  if (micUplinkUsed() >= kBacklogDegraded) return TalkHealth::Degraded;
-  return TalkHealth::Ok;
+  if (micUplinkUsed() >= kBacklogDegraded) return ElHealth::Degraded;
+  return ElHealth::Ok;
 }
 
-const char *talkAgentStatus() { return statusBuf; }
-const char *talkAgentLastUser() { return lastUserBuf; }
-const char *talkAgentLastReply() { return lastReplyBuf; }
+const char *elAgentStatus() { return statusBuf; }
+const char *elAgentLastUser() { return lastUserBuf; }
+const char *elAgentLastReply() { return lastReplyBuf; }
 
 static bool agentIsSpeaking() {
   // Any queued TTS, recent network audio, or recent non-silent DAC output.
@@ -1238,11 +1239,11 @@ static bool agentIsSpeaking() {
   return false;
 }
 
-bool talkAgentIsSpeaking() {
+bool elAgentIsSpeaking() {
   return agentActive && !holdListening && agentIsSpeaking();
 }
 
-void talkAgentUserActivity() {
+void elAgentUserActivity() {
   if (!agentActive || !agentReady) return;
 
   // ElevenLabs barge-in is server-side (VAD on your mic uplink → `interruption`).
@@ -1262,9 +1263,9 @@ void talkAgentUserActivity() {
        (unsigned long)lostMs);
 }
 
-float talkAgentPlayLevel() { return playLevelEma; }
+float elAgentPlayLevel() { return playLevelEma; }
 
-int talkAgentWaveBars(uint8_t *out, int maxBars) {
+int elAgentWaveBars(uint8_t *out, int maxBars) {
   if (!out || maxBars <= 0) return 0;
   int n = maxBars < kWaveBars ? maxBars : kWaveBars;
   memcpy(out, waveBars, (size_t)n);
@@ -1318,12 +1319,14 @@ static void updateWaveBars(const int16_t *mic, int nMic, const int16_t *play,
 }
 
 // Real-time duplex pump — must not share the UI thread (TFT stalls = audio stutter).
-static void talkAgentPumpAudio() {
+static void elAgentPumpAudio() {
   if (!agentActive) return;
 
   int n = talkAudioReadPcmTimeout(micTmp, TALK_I2S_BUF_SAMPLES, 20);
   if (n <= 0) {
     micReadGaps++;
+    // Still feed the speaker — a dry TX DMA on the MAX98357 is loud static.
+    talkAudioWriteSilence(TALK_I2S_BUF_SAMPLES, 20);
     return;
   }
 
@@ -1402,7 +1405,7 @@ static void talkAudioTask(void *arg) {
   logf("audio task on core %d\n", xPortGetCoreID());
   while (audioTaskRun) {
     if (agentActive) {
-      talkAgentPumpAudio();
+      elAgentPumpAudio();
     } else {
       vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -1423,6 +1426,6 @@ static void stopAudioTask() {
   for (int i = 0; i < 50 && audioTaskHandle; i++) delay(10);
 }
 
-void talkAgentLoop() {
+void elAgentLoop() {
   // Audio runs on el_audio task. UI thread only needs status/wave samples.
 }

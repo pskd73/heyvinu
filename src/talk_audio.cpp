@@ -192,6 +192,21 @@ int talkAudioReadPcmTimeout(int16_t *out, int maxSamples, uint32_t timeoutMs) {
   return n;
 }
 
+bool talkAudioWriteSilence(int samples, uint32_t timeoutMs) {
+  if (samples <= 0) return true;
+  // Static zeros — keep the TX DMA fed so the MAX98357 never sees an underrun
+  // (underrun garbage is loud white noise on this amp).
+  static int16_t zeros[TALK_I2S_BUF_SAMPLES] = {};
+  int left = samples;
+  bool ok = true;
+  while (left > 0) {
+    const int n = left > TALK_I2S_BUF_SAMPLES ? TALK_I2S_BUF_SAMPLES : left;
+    if (!talkAudioWritePcmTimeout(zeros, n, timeoutMs)) ok = false;
+    left -= n;
+  }
+  return ok;
+}
+
 bool talkAudioWritePcmTimeout(const int16_t *data, int samples,
                               uint32_t timeoutMs) {
   if (!i2sBeginOp()) return false;
@@ -293,6 +308,20 @@ void talkPlayRingSetFormat(int srcRate, bool ulaw) {
 size_t talkPlayRingPush(const uint8_t *data, size_t nbytes) {
   if (!playRing || !data || !nbytes) return 0;
 
+  // μ-law silence is 0xFF (PCM 0). A frame of 0x00 bytes is near full-scale
+  // negative (−32124) — some servers pad gaps with zeros, which blasts the
+  // MAX98357 as loud static. Rewrite all-zero ulaw chunks to true silence.
+  bool ulawZeroPad = false;
+  if (playInBytes == 1) {
+    ulawZeroPad = true;
+    for (size_t i = 0; i < nbytes; i++) {
+      if (data[i] != 0) {
+        ulawZeroPad = false;
+        break;
+      }
+    }
+  }
+
   portENTER_CRITICAL(&playMux);
   const size_t head = playHead;
   const size_t room = playCap - playUsed;
@@ -307,8 +336,13 @@ size_t talkPlayRingPush(const uint8_t *data, size_t nbytes) {
   // would starve I2S and the radio.
   const size_t contig = playCap - head;
   const size_t first = (n < contig) ? n : contig;
-  memcpy(playRing + head, data, first);
-  if (n > first) memcpy(playRing, data + first, n - first);
+  if (ulawZeroPad) {
+    memset(playRing + head, 0xFF, first);
+    if (n > first) memset(playRing, 0xFF, n - first);
+  } else {
+    memcpy(playRing + head, data, first);
+    if (n > first) memcpy(playRing, data + first, n - first);
+  }
 
   portENTER_CRITICAL(&playMux);
   playHead = (head + n) % playCap;
@@ -362,10 +396,10 @@ size_t talkPlayRingPop(int16_t *out, size_t maxCount) {
       playRsFrac -= (1u << 16);
       playRsPrev = playRsCur;
       if (!nextIn(&playRsCur)) {
-        // Hold the last sample and let the caller zero-fill the rest; the pump
-        // re-primes the jitter buffer once the ring drains completely.
-        playRsCur = playRsPrev;
-        playRsFrac = 0;
+        // Stop cleanly — do not hold the last sample into the underrun (that
+        // leaves a DC spike into the zero-fill and a crack when the next
+        // burst starts). Caller zero-fills the rest of the block.
+        playResetResampler();
         starved = true;
         break;
       }

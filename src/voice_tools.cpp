@@ -1,4 +1,4 @@
-#include "talk_tools.h"
+#include "voice_tools.h"
 
 #include <Arduino.h>
 #include <string.h>
@@ -10,7 +10,7 @@ constexpr size_t kLastTextLen = 128;
 
 struct Entry {
   const char *name;
-  TalkToolFn fn;
+  VoiceToolFn fn;
 };
 
 Entry tools_[kMaxTools] = {};
@@ -39,12 +39,12 @@ bool toolShowText(JsonObjectConst params, char *resultOut, size_t resultLen) {
 
 } // namespace
 
-void talkToolsReset() {
+void voiceToolsReset() {
   toolCount_ = 0;
-  talkToolsClearLastText();
+  voiceToolsClearLastText();
 }
 
-void talkToolsRegister(const char *name, TalkToolFn fn) {
+void voiceToolsRegister(const char *name, VoiceToolFn fn) {
   if (!name || !name[0] || !fn || toolCount_ >= kMaxTools) return;
   for (uint8_t i = 0; i < toolCount_; i++) {
     if (tools_[i].name && !strcmp(tools_[i].name, name)) {
@@ -57,11 +57,11 @@ void talkToolsRegister(const char *name, TalkToolFn fn) {
   toolCount_++;
 }
 
-void talkToolsRegisterDefaults() {
-  talkToolsRegister("show_text", toolShowText);
+void voiceToolsRegisterDefaults() {
+  voiceToolsRegister("show_text", toolShowText);
 }
 
-bool talkToolsDispatch(const char *name, JsonVariantConst params,
+bool voiceToolsDispatch(const char *name, JsonVariantConst params,
                        char *resultOut, size_t resultLen) {
   if (resultOut && resultLen) resultOut[0] = '\0';
   if (!name || !name[0]) {
@@ -78,11 +78,11 @@ bool talkToolsDispatch(const char *name, JsonVariantConst params,
   return false;
 }
 
-const char *talkToolsLastText() { return lastText_; }
+const char *voiceToolsLastText() { return lastText_; }
 
-uint32_t talkToolsTextGen() { return textGen_; }
+uint32_t voiceToolsTextGen() { return textGen_; }
 
-void talkToolsClearLastText() {
+void voiceToolsClearLastText() {
   lastText_[0] = '\0';
   textGen_++;
 }

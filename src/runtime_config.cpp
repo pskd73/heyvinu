@@ -23,11 +23,15 @@ const Entry kEntries[Count] = {
      false},
     {ImageProvider, "image_provider", "Image provider (elevenlabs|openrouter)",
      16, false},
+    {VoiceProvider, "voice_provider", "Voice provider (elevenlabs|deepgram)", 16,
+     false},
 };
 
-const uint16_t kStoreBytes = 64 + 64 + 160 + 96 + 96 + 64 + 16;
+const uint16_t kStoreBytes = 64 + 64 + 160 + 96 + 96 + 64 + 16 + 16;
 /** Pre-ImageProvider layout (for NVS migrate). */
 constexpr uint16_t kStoreBytesV1 = 64 + 64 + 160 + 96 + 96 + 64;
+/** Pre-VoiceProvider layout. */
+constexpr uint16_t kStoreBytesV2 = 64 + 64 + 160 + 96 + 96 + 64 + 16;
 
 Key keyFromName(const char *name) {
   const Entry *e = findEntry(name);
@@ -59,7 +63,7 @@ namespace {
 
 struct ConfigStore {
   static constexpr uint32_t kMagic = 0x43464731u; // 'CFG1'
-  static constexpr uint16_t kVersion = 2;
+  static constexpr uint16_t kVersion = 3;
 
   uint32_t magic = kMagic;
   uint16_t version = kVersion;
@@ -69,6 +73,8 @@ struct ConfigStore {
 
 /** Header + slots before ImageProvider was added. */
 constexpr size_t kV1StoreSize = 8 + Config::kStoreBytesV1;
+/** Header + slots before VoiceProvider was added. */
+constexpr size_t kV2StoreSize = 8 + Config::kStoreBytesV2;
 
 ConfigStore *gStore = nullptr;
 bool gStoreNeedsSave_ = false;
@@ -92,15 +98,43 @@ bool configLoadNvs(ConfigStore &out) {
     const size_t got = prefs.getBytes(kNvsKey, &out, sizeof(out));
     prefs.end();
     if (got != sizeof(out) || out.magic != ConfigStore::kMagic) return false;
-    if (out.version != ConfigStore::kVersion && out.version != 1) return false;
-    if (out.version == 1) {
+    if (out.version != ConfigStore::kVersion && out.version != 1 &&
+        out.version != 2) {
+      return false;
+    }
+    if (out.version != ConfigStore::kVersion) {
       out.version = ConfigStore::kVersion;
       gStoreNeedsSave_ = true;
     }
     return true;
   }
 
-  // Migrate v1 blob (no ImageProvider slot).
+  // Migrate v2 blob (no VoiceProvider slot).
+  if (len == kV2StoreSize) {
+    uint8_t *raw = static_cast<uint8_t *>(malloc(kV2StoreSize));
+    if (!raw) {
+      prefs.end();
+      return false;
+    }
+    const size_t got = prefs.getBytes(kNvsKey, raw, kV2StoreSize);
+    prefs.end();
+    if (got != kV2StoreSize) {
+      free(raw);
+      return false;
+    }
+    memset(&out, 0, sizeof(out));
+    memcpy(&out, raw, kV2StoreSize);
+    free(raw);
+    if (out.magic != ConfigStore::kMagic) return false;
+    out.version = ConfigStore::kVersion;
+    strncpy(out.slots + Config::kStoreBytesV2, "elevenlabs", 15);
+    out.slots[Config::kStoreBytesV2 + 15] = '\0';
+    gStoreNeedsSave_ = true;
+    Serial.println("Config: migrated NVS store (+voice_provider)");
+    return true;
+  }
+
+  // Migrate v1 blob (no ImageProvider / VoiceProvider slots).
   if (len == kV1StoreSize) {
     uint8_t *raw = static_cast<uint8_t *>(malloc(kV1StoreSize));
     if (!raw) {
@@ -120,8 +154,10 @@ bool configLoadNvs(ConfigStore &out) {
     out.version = ConfigStore::kVersion;
     strncpy(out.slots + Config::kStoreBytesV1, "openrouter", 15);
     out.slots[Config::kStoreBytesV1 + 15] = '\0';
+    strncpy(out.slots + Config::kStoreBytesV2, "elevenlabs", 15);
+    out.slots[Config::kStoreBytesV2 + 15] = '\0';
     gStoreNeedsSave_ = true;
-    Serial.println("Config: migrated NVS store (+image_provider)");
+    Serial.println("Config: migrated NVS store (+image_provider +voice_provider)");
     return true;
   }
 
@@ -209,6 +245,8 @@ const char *compileDefault(Config::Key key) {
 #endif
   case Config::ImageProvider:
     return "openrouter";
+  case Config::VoiceProvider:
+    return "elevenlabs";
   default:
     return "";
   }
