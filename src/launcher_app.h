@@ -4,6 +4,7 @@
 
 /**
  * Home launcher — horizontal carousel of installed apps (one at a time).
+ * While open, listens for "Hey Luna" and opens the last Ask agent.
  */
 struct LauncherState {
   static constexpr uint32_t kMagic = 0x4C4E4352u; // 'LNCR'
@@ -36,6 +37,8 @@ public:
     }
   }
 
+  void frame(Canvas &canvas, InputHub &input, float dt) override;
+
 protected:
   const char *nvsNamespace() const override { return "launch"; }
 
@@ -63,17 +66,8 @@ protected:
     return false;
   }
 
-  void onOpen() override {
-    self_ = this;
-    if (state().magic != LauncherState::kMagic ||
-        state().version != LauncherState::kVersion) {
-      data() = LauncherState{};
-    }
-  }
-
-  void onClose() override {
-    if (self_ == this) self_ = nullptr;
-  }
+  void onOpen() override;
+  void onClose() override;
 
   void build(Page &page, uint8_t /*pageId*/) override;
 
@@ -89,6 +83,7 @@ private:
 
   void refreshListed();
   void clampSelected();
+  void openAskFromWake();
   static void selectPrev();
   static void selectNext();
   static void launchSelected();

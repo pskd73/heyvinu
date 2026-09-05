@@ -5,11 +5,15 @@
 #include "image_preview.h"
 #include "elevenlabs_agent.h"
 #include "voice_tools.h"
+#include "wake_word.h"
 
 #include <stdio.h>
 #include <string.h>
 
 AskApp *AskApp::self_ = nullptr;
+bool AskApp::wakeResume_ = false;
+
+void AskApp::requestWakeResume() { wakeResume_ = true; }
 
 const char *AskApp::pageTitle(uint8_t id) const {
   if (id == kPageTalk && talkTitle_[0]) return talkTitle_;
@@ -42,6 +46,7 @@ uint16_t AskApp::shellStatusColor(uint8_t i) const {
 
 void AskApp::onOpen() {
   self_ = this;
+  wakeWordStop(); // free I2S if launcher wake was still winding down
   if (state().magic != AskState::kMagic ||
       state().version != AskState::kVersion) {
     data() = AskState{};
@@ -53,12 +58,13 @@ void AskApp::onOpen() {
   pendingFetch_ = true;
   warmupFrames_ = 1;
   if (voiceSupportsAgentPicker()) {
-    snprintf(statusLine_, sizeof(statusLine_), "Loading agents...");
+    snprintf(statusLine_, sizeof(statusLine_), "Loading agents");
   } else {
-    snprintf(statusLine_, sizeof(statusLine_), "Starting…");
+    snprintf(statusLine_, sizeof(statusLine_), "Starting");
   }
   // Flags only — onClose already tore down any previous session, and calling
   // stop here would log a spurious teardown on every open.
+  openedFromWake_ = false;
   resetTalkState();
 }
 
@@ -75,6 +81,10 @@ bool AskApp::goBack() {
     return true;
   }
   if (pageId() == kPageTalk) {
+    if (openedFromWake_) {
+      exitTalkSession();
+      return true;
+    }
     leaveTalk();
   }
   return back();
@@ -177,17 +187,13 @@ void AskApp::onStatusTick(UINode &node, float dt) {
 
   self->pendingFetch_ = false;
 
+  if (self->tryWakeResume()) {
+    return;
+  }
+
   if (!voiceSupportsAgentPicker()) {
     // Deepgram (and any non-picker provider): skip ConvAI agent list.
-    snprintf(self->agentId_, sizeof(self->agentId_), "%s", "deepgram");
-    snprintf(self->talkTitle_, sizeof(self->talkTitle_), "%s", "Deepgram");
-    snprintf(self->talkLine_, sizeof(self->talkLine_), "Connecting...");
-    self->toolLine_[0] = ' ';
-    self->toolLine_[1] = '\0';
-    self->toolTextGen_ = voiceToolsTextGen();
-    self->pendingStart_ = true;
-    self->warmupFrames_ = 1;
-    self->goTo(kPageTalk, NavMode::Replace);
+    self->openTalkAgent("deepgram", "Deepgram", /*replaceNav=*/true);
     return;
   }
 
@@ -271,12 +277,27 @@ void AskApp::buildAgents(Page &page) {
 
 // --- Live conversation --------------------------------------------------
 
-void AskApp::openTalk(int index) {
-  if (index < 0 || index >= agentCount_) {
-    return;
+void AskApp::rememberLastAgent(const char *id, const char *name) {
+  if (!id || !id[0]) return;
+  AskState &st = data();
+  const bool idSame = strncmp(st.lastAgentId, id, sizeof(st.lastAgentId)) == 0;
+  const bool nameSame =
+      name && strncmp(st.lastAgentName, name, sizeof(st.lastAgentName)) == 0;
+  if (idSame && nameSame) return;
+  memset(st.lastAgentId, 0, sizeof(st.lastAgentId));
+  memset(st.lastAgentName, 0, sizeof(st.lastAgentName));
+  strncpy(st.lastAgentId, id, sizeof(st.lastAgentId) - 1);
+  if (name && name[0]) {
+    strncpy(st.lastAgentName, name, sizeof(st.lastAgentName) - 1);
   }
-  snprintf(agentId_, sizeof(agentId_), "%s", agents_[index].id);
-  snprintf(talkTitle_, sizeof(talkTitle_), "%s", agents_[index].name);
+  schedulePersist();
+}
+
+void AskApp::openTalkAgent(const char *id, const char *name, bool replaceNav) {
+  if (!id || !id[0]) return;
+  snprintf(agentId_, sizeof(agentId_), "%s", id);
+  snprintf(talkTitle_, sizeof(talkTitle_), "%s",
+           (name && name[0]) ? name : "Ask");
   snprintf(talkLine_, sizeof(talkLine_), "Connecting...");
   toolLine_[0] = ' ';
   toolLine_[1] = '\0';
@@ -288,7 +309,38 @@ void AskApp::openTalk(int index) {
   lastUiMs_ = 0;
   pendingStart_ = true;
   warmupFrames_ = 1;
-  goTo(kPageTalk);
+  if (voiceSupportsAgentPicker()) {
+    rememberLastAgent(id, talkTitle_);
+  }
+  goTo(kPageTalk, replaceNav ? NavMode::Replace : NavMode::Push);
+}
+
+void AskApp::openTalk(int index) {
+  if (index < 0 || index >= agentCount_) {
+    return;
+  }
+  openTalkAgent(agents_[index].id, agents_[index].name, /*replaceNav=*/false);
+}
+
+bool AskApp::tryWakeResume() {
+  if (!wakeResume_) return false;
+  wakeResume_ = false;
+
+  if (!voiceSupportsAgentPicker()) {
+    openedFromWake_ = true;
+    openTalkAgent("deepgram", "Deepgram", /*replaceNav=*/true);
+    return true;
+  }
+
+  const AskState &st = state();
+  if (st.magic == AskState::kMagic && st.version == AskState::kVersion &&
+      st.lastAgentId[0]) {
+    openedFromWake_ = true;
+    openTalkAgent(st.lastAgentId, st.lastAgentName, /*replaceNav=*/true);
+    return true;
+  }
+
+  return false;
 }
 
 void AskApp::resetTalkState() {
@@ -315,6 +367,17 @@ void AskApp::leaveTalk() {
   resetTalkState();
   imagePreviewClear();
   voiceStop();
+}
+
+void AskApp::exitTalkSession() {
+  const bool toLauncher = openedFromWake_;
+  openedFromWake_ = false;
+  leaveTalk();
+  if (toLauncher) {
+    if (host()) host()->openLauncher();
+  } else {
+    back();
+  }
 }
 
 void AskApp::clearSessionImages() {
@@ -548,9 +611,21 @@ void AskApp::onTalkTick(UINode &node, float dt) {
 
   self->runPendingGalleryLoad();
 
-  if (self->started_ && !self->failed_ && !voiceActive()) {
-    self->failed_ = true;
-    snprintf(self->errMsg_, sizeof(self->errMsg_), "%s", voiceStatus());
+  if (self->started_ && !self->failed_) {
+    // Agent hung up, or transport died after a wake-started call — leave Talk.
+    // Wake path returns to the launcher so listening can arm again.
+    if (voiceTakeEndedByAgent()) {
+      self->exitTalkSession();
+      return;
+    }
+    if (!voiceActive()) {
+      if (self->openedFromWake_) {
+        self->exitTalkSession();
+        return;
+      }
+      self->failed_ = true;
+      snprintf(self->errMsg_, sizeof(self->errMsg_), "%s", voiceStatus());
+    }
   }
 
   const uint32_t now = millis();

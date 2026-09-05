@@ -43,6 +43,8 @@ bool voiceReady() {
   return false;
 }
 
+bool voiceTakeEndedByAgent() { return elAgentTakeEndedByAgent(); }
+
 const char *voiceStatus() {
   if (dgAgentActive()) return dgAgentStatus();
   if (elAgentIsActive()) return elAgentStatus();

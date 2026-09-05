@@ -12,6 +12,15 @@ void talkAudioStopI2s();
 void talkAudioResetDsp();
 
 int talkAudioReadPcmTimeout(int16_t *out, int maxSamples, uint32_t timeoutMs);
+/**
+ * Mic PCM without AGC / noise gate. Prefer this for on-device wake models —
+ * microWakeWord's frontend expects continuous levels, not uplink-gated audio.
+ */
+int talkAudioReadPcmRawTimeout(int16_t *out, int maxSamples,
+                               uint32_t timeoutMs);
+/** Mic PCM for wake: DC/HPF only (no AGC, no gate). */
+int talkAudioReadPcmWakeTimeout(int16_t *out, int maxSamples,
+                                uint32_t timeoutMs);
 bool talkAudioWritePcmTimeout(const int16_t *data, int samples,
                               uint32_t timeoutMs);
 /** Keep TX DMA fed with digital silence (avoids MAX98357 underrun noise). */

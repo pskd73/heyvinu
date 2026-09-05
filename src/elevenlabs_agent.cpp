@@ -62,6 +62,14 @@ static bool lastInitHadContext = false;
 static volatile bool pendingInit = false;
 static volatile int pendingPongId = -1;
 static volatile bool pendingPong = false;
+/**
+ * Agent invoked system tool `end_call`. Mirror the ElevenLabs client SDK:
+ * hang up after farewell audio drains (UI thread via elAgentLoop — never from
+ * the ws task, or stopWsTask deadlocks waiting on itself).
+ */
+static volatile bool pendingEndCall = false;
+static volatile bool endedByAgent = false;
+static uint32_t endCallAtMs = 0;
 static uint32_t audioChunksRx = 0;
 static uint32_t readyAtMs = 0;
 static uint32_t lastAgentAudioMs = 0;
@@ -381,6 +389,56 @@ static bool appendLit(char *dst, size_t cap, size_t *at, const char *s) {
   return true;
 }
 
+/**
+ * Events this client needs. Agent configs can omit `agent_tool_response`,
+ * which is the official hang-up signal for system tool `end_call` (see
+ * ElevenLabs SDK BaseConversation.handleAgentToolResponse). Override on
+ * initiation so we always receive it — farewell TTS alone does not end the WS.
+ */
+static constexpr const char kInitClientEventsJson[] =
+    "\"conversation_config_override\":{"
+    "\"conversation\":{"
+    "\"client_events\":["
+    "\"audio\","
+    "\"agent_response\","
+    "\"agent_response_correction\","
+    "\"interruption\","
+    "\"user_transcript\","
+    "\"conversation_initiation_metadata\","
+    "\"client_tool_call\","
+    "\"agent_tool_request\","
+    "\"agent_tool_response\","
+    "\"ping\","
+    "\"guardrail_triggered\""
+    "]}}";
+
+static constexpr const char kInitFreshJson[] =
+    "{\"type\":\"conversation_initiation_client_data\","
+    "\"conversation_config_override\":{"
+    "\"conversation\":{"
+    "\"client_events\":["
+    "\"audio\","
+    "\"agent_response\","
+    "\"agent_response_correction\","
+    "\"interruption\","
+    "\"user_transcript\","
+    "\"conversation_initiation_metadata\","
+    "\"client_tool_call\","
+    "\"agent_tool_request\","
+    "\"agent_tool_response\","
+    "\"ping\","
+    "\"guardrail_triggered\""
+    "]}}}";
+
+static void scheduleEndCall(const char *why) {
+  if (pendingEndCall) return;
+  pendingEndCall = true;
+  endCallAtMs = millis();
+  micUplinkClear();
+  setStatus("Ending");
+  logf("%s — draining playback then hang up\n", why ? why : "end");
+}
+
 static void sendInit() {
   // Continuity: each WS session is a *new* conversation. Reinject transcript
   // text only via dynamic_variables. Never send previous_conversation_id.
@@ -398,29 +456,33 @@ static void sendInit() {
     textLen = textLen - off;
   }
 
-  // Match the historically working payload exactly for a cold start. Building
-  // the same JSON in PSRAM (and adding user_id) correlated with immediate
-  // peer closes before agent-ready across every agent.
+  // Prefer a fixed flash-resident initiation for cold start — building the
+  // same JSON in PSRAM (and adding user_id) correlated with immediate peer
+  // closes before agent-ready. Always request agent_tool_response so end_call
+  // is not dropped when the agent config's client_events list omits it.
   if (textLen == 0) {
     lastInitHadContext = false;
     logf("init fresh\n");
-    sendJson("{\"type\":\"conversation_initiation_client_data\"}");
-    logf("sent initiation bytes=47 (literal)\n");
+    sendJson(kInitFreshJson);
+    logf("sent initiation bytes=%u (literal)\n",
+         (unsigned)(sizeof(kInitFreshJson) - 1));
     return;
   }
 
-  const size_t need = 512 + textLen * 6;
+  const size_t need = 512 + textLen * 6 + sizeof(kInitClientEventsJson);
   if (!ensureTxJson(need < 4096 ? 4096 : need)) {
     logf("init OOM need=%u — falling back to fresh\n", (unsigned)need);
     lastInitHadContext = false;
-    sendJson("{\"type\":\"conversation_initiation_client_data\"}");
+    sendJson(kInitFreshJson);
     return;
   }
 
   size_t at = 0;
   if (!appendLit(txJsonBuf, txJsonCap, &at,
-                 "{\"type\":\"conversation_initiation_client_data\","
-                 "\"dynamic_variables\":{"
+                 "{\"type\":\"conversation_initiation_client_data\",") ||
+      !appendLit(txJsonBuf, txJsonCap, &at, kInitClientEventsJson) ||
+      !appendLit(txJsonBuf, txJsonCap, &at,
+                 ",\"dynamic_variables\":{"
                  "\"has_conversation_context\":\"true\","
                  "\"conversation_context\":\"")) {
     logf("init build fail (head)\n");
@@ -431,7 +493,7 @@ static void sendInit() {
   if (next == (size_t)-1) {
     logf("init escape fail — falling back to fresh\n");
     lastInitHadContext = false;
-    sendJson("{\"type\":\"conversation_initiation_client_data\"}");
+    sendJson(kInitFreshJson);
     return;
   }
   at = next;
@@ -449,7 +511,7 @@ static void sendInit() {
 
   // Copy into DRAM for the first post-connect frame — some TLS paths have been
   // flaky reading the initiation payload straight from PSRAM.
-  char stackInit[768];
+  char stackInit[1024];
   if (at + 1 <= sizeof(stackInit)) {
     memcpy(stackInit, txJsonBuf, at + 1);
     sendJson(stackInit);
@@ -813,11 +875,37 @@ static void handleWsMessage(uint8_t *payload, size_t length) {
     handleClientToolCall(doc);
   } else if (!strcmp(type, "agent_tool_request")) {
     JsonObjectConst req = doc["agent_tool_request"];
-    logf("tool-req %s type=%s id=%s\n", req["tool_name"] | "?",
-         req["tool_type"] | "?", req["tool_call_id"] | "?");
+    const char *tool = req["tool_name"] | "";
+    logf("tool-req %s type=%s id=%s\n", tool, req["tool_type"] | "?",
+         req["tool_call_id"] | "?");
+    // System end_call: request can arrive before the farewell TTS finishes;
+    // hang up on response (below) so audio can drain. Log only here.
+  } else if (!strcmp(type, "agent_tool_response") ||
+             !strcmp(type, "agent_tool_response_full_payload")) {
+    // Official hang-up signal — same as @elevenlabs/client
+    // BaseConversation.handleAgentToolResponse.
+    const char *key = !strcmp(type, "agent_tool_response")
+                          ? "agent_tool_response"
+                          : "agent_tool_response_full_payload";
+    JsonObjectConst resp = doc[key];
+    const char *tool = resp["tool_name"] | "";
+    const bool isErr = resp["is_error"] | false;
+    logf("tool-resp %s type=%s err=%d\n", tool, resp["tool_type"] | "?",
+         isErr ? 1 : 0);
+    if (!isErr && !strcmp(tool, "end_call")) {
+      scheduleEndCall("end_call");
+    }
+  } else if (!strcmp(type, "guardrail_triggered")) {
+    scheduleEndCall("guardrail_triggered");
   } else if (!strcmp(type, "error")) {
-    setStatus("Error");
-    logf("EL error: %.160s\n", msg);
+    JsonObjectConst ev = doc["error_event"];
+    const char *errType = ev["error_type"] | "";
+    if (!strcmp(errType, "max_duration_exceeded")) {
+      scheduleEndCall("max_duration_exceeded");
+    } else {
+      setStatus("Error");
+      logf("EL error: %.160s\n", msg);
+    }
   } else {
     logf("el: %s (%u)\n", type, (unsigned)length);
   }
@@ -860,7 +948,12 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
     } else {
       logf("WS disconnected\n");
     }
-    if (!agentReady && lastInitHadContext) {
+    if (pendingEndCall) {
+      // Peer closed while we were draining farewell — treat as clean hang-up.
+      pendingEndCall = false;
+      endedByAgent = true;
+      setStatus("Idle");
+    } else if (!agentReady && lastInitHadContext) {
       // Peer closed before conversation_initiation_metadata — almost always
       // the continue payload (undeclared dynamic vars / oversized context).
       // Drop saved context so the next Talk start uses init fresh.
@@ -920,11 +1013,13 @@ static void wsTask(void *arg) {
           logf("tool generate_image done err=%d %s\n", isError ? 1 : 0, result);
         }
       }
-      sendMicChunkFromUplink();
+      // Farewell may still be in the play ring; stop uplink so we do not open
+      // another turn after end_call.
+      if (!pendingEndCall) sendMicChunkFromUplink();
 
       // Select hold: once the agent stops sending audio, release so the next
       // turn can play. Real barge-in clears hold earlier via `interruption`.
-      if (holdListening && lastHoldDropMs != 0 &&
+      if (!pendingEndCall && holdListening && lastHoldDropMs != 0 &&
           (millis() - lastHoldDropMs) > 800 &&
           (millis() - holdStartedMs) > 400) {
         holdListening = false;
@@ -1140,6 +1235,9 @@ bool elAgentStart(AppHost *host, const char *agentId) {
   lastUplinkStatMs = 0;
   pendingInit = false;
   pendingPong = false;
+  pendingEndCall = false;
+  endedByAgent = false;
+  endCallAtMs = 0;
   holdListening = false;
   holdStartedMs = 0;
   lastHoldDropMs = 0;
@@ -1180,6 +1278,7 @@ bool elAgentStart(AppHost *host, const char *agentId) {
 void elAgentStop() {
   pendingInit = false;
   pendingPong = false;
+  pendingEndCall = false;
   holdListening = false;
   persistContext();
   stopAudioTask();
@@ -1197,6 +1296,12 @@ void elAgentStop() {
 
 bool elAgentIsActive() { return agentActive; }
 bool elAgentIsReady() { return agentReady; }
+
+bool elAgentTakeEndedByAgent() {
+  if (!endedByAgent) return false;
+  endedByAgent = false;
+  return true;
+}
 ElHealth elAgentHealth() {
   if (!agentActive) return ElHealth::Offline;
   if (!agentReady) return ElHealth::Connecting;
@@ -1380,7 +1485,9 @@ static void elAgentPumpAudio() {
          (unsigned long)talkAudioWriteMaxMs());
   }
 
-  if (holdListening) {
+  if (pendingEndCall) {
+    // Keep "Ending" — do not bounce back to Listening after the goodbye TTS.
+  } else if (holdListening) {
     if (strcmp(statusBuf, "Listening") != 0) setStatus("Listening");
   } else if (agentIsSpeaking()) {
     if (strcmp(statusBuf, "Listening") == 0) {
@@ -1394,6 +1501,10 @@ static void elAgentPumpAudio() {
   // stream and closes the socket after 60 s without user audio. talkAecProcess
   // strips the speaker bleed so the agent does not hear itself, while leaving
   // enough through during double talk to allow barge-in.
+  if (pendingEndCall) {
+    // Still run I2S so farewell audio drains; do not capture for uplink.
+    return;
+  }
   talkAecProcess(micTmp, (size_t)n);
   const size_t pushed = micUplinkPush(micTmp, (size_t)n);
   micCapturedSamples += (uint32_t)n;
@@ -1427,5 +1538,26 @@ static void stopAudioTask() {
 }
 
 void elAgentLoop() {
-  // Audio runs on el_audio task. UI thread only needs status/wave samples.
+  // Audio runs on el_audio task. UI thread finishes end_call teardown here so
+  // stopWsTask does not wait on the ws task from inside itself.
+  if (!pendingEndCall || !agentActive) return;
+
+  static constexpr uint32_t kEndCallDrainTailMs = 400;
+  static constexpr uint32_t kEndCallTimeoutMs = 12000;
+  const uint32_t now = millis();
+  const bool drained =
+      talkPlayRingEmpty() &&
+      (lastAgentAudioMs == 0 ||
+       (now - lastAgentAudioMs) >= kEndCallDrainTailMs) &&
+      (lastNonSilentPlayMs == 0 ||
+       (now - lastNonSilentPlayMs) >= kEndCallDrainTailMs);
+  const bool timedOut =
+      endCallAtMs != 0 && (now - endCallAtMs) >= kEndCallTimeoutMs;
+  if (!drained && !timedOut) return;
+
+  logf("end_call hang up drained=%d timed_out=%d ring=%lums\n", drained ? 1 : 0,
+       timedOut ? 1 : 0, (unsigned long)talkPlayRingUsedMs());
+  endedByAgent = true;
+  pendingEndCall = false;
+  elAgentStop();
 }

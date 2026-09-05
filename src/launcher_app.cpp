@@ -1,8 +1,46 @@
 #include "launcher_app.h"
 
+#include "ask_app.h"
+#include "wake_word.h"
+
 #include <string.h>
 
 LauncherApp *LauncherApp::self_ = nullptr;
+
+void LauncherApp::onOpen() {
+  self_ = this;
+  if (state().magic != LauncherState::kMagic ||
+      state().version != LauncherState::kVersion) {
+    data() = LauncherState{};
+  }
+  wakeWordStart(host());
+}
+
+void LauncherApp::onClose() {
+  wakeWordStop();
+  if (self_ == this) self_ = nullptr;
+}
+
+void LauncherApp::openAskFromWake() {
+  if (!host()) return;
+  wakeWordStop();
+  AskApp::requestWakeResume();
+  AppInfo all[Flow32::kMaxApps];
+  const uint8_t n = host()->getApps(all, Flow32::kMaxApps);
+  for (uint8_t i = 0; i < n; i++) {
+    if (all[i].name && strcmp(all[i].name, "Ask") == 0) {
+      host()->openApp(all[i].index);
+      return;
+    }
+  }
+}
+
+void LauncherApp::frame(Canvas &canvas, InputHub &input, float dt) {
+  App<LauncherState>::frame(canvas, input, dt);
+  if (wakeWordTakeDetected()) {
+    openAskFromWake();
+  }
+}
 
 void LauncherApp::refreshListed() {
   listedCount_ = 0;

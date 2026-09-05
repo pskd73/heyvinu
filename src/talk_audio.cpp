@@ -175,7 +175,34 @@ bool talkAudioStartDuplex() {
   return true;
 }
 
-int talkAudioReadPcmTimeout(int16_t *out, int maxSamples, uint32_t timeoutMs) {
+static int16_t micSlotToPcmWake(int32_t raw) {
+  // Fixed-gain DC + HPF for microWakeWord. No AGC/gate — AGC was saturating
+  // mel bins (feat max stuck at 127) and killing model scores.
+  float x = (float)(raw >> 8);
+  float y = x - dspDcX + 0.995f * dspDcY;
+  dspDcX = x;
+  dspDcY = y;
+  float hp = 0.961f * (dspHpfY + y - dspHpfX);
+  dspHpfX = y;
+  dspHpfY = hp;
+  // ~6–12 dB digital gain (ESPHome mWW is in this ballpark).
+  float out = hp / 256.0f * 6.0f;
+  if (out > 32767.0f) out = 32767.0f;
+  if (out < -32768.0f) out = -32768.0f;
+  return (int16_t)out;
+}
+
+static int16_t micSlotToPcmRaw(int32_t raw) {
+  int32_t s = raw >> 16;
+  if (s > 32767) s = 32767;
+  if (s < -32768) s = -32768;
+  return (int16_t)s;
+}
+
+enum MicConvertMode { MIC_CVT_UPLINK = 0, MIC_CVT_RAW = 1, MIC_CVT_WAKE = 2 };
+
+static int talkAudioReadPcmConverted(int16_t *out, int maxSamples,
+                                     uint32_t timeoutMs, MicConvertMode mode) {
   if (!i2sBeginOp()) return 0;
   size_t bytesRead = 0;
   TickType_t ticks = (timeoutMs == 0) ? 0 : pdMS_TO_TICKS(timeoutMs);
@@ -187,9 +214,25 @@ int talkAudioReadPcmTimeout(int16_t *out, int maxSamples, uint32_t timeoutMs) {
   int n = (int)(bytesRead / sizeof(int32_t));
   if (n > maxSamples) n = maxSamples;
   for (int i = 0; i < n; i++) {
-    out[i] = micSlotToPcm(i2sRaw[i]);
+    if (mode == MIC_CVT_WAKE) out[i] = micSlotToPcmWake(i2sRaw[i]);
+    else if (mode == MIC_CVT_RAW) out[i] = micSlotToPcmRaw(i2sRaw[i]);
+    else out[i] = micSlotToPcm(i2sRaw[i]);
   }
   return n;
+}
+
+int talkAudioReadPcmTimeout(int16_t *out, int maxSamples, uint32_t timeoutMs) {
+  return talkAudioReadPcmConverted(out, maxSamples, timeoutMs, MIC_CVT_UPLINK);
+}
+
+int talkAudioReadPcmRawTimeout(int16_t *out, int maxSamples,
+                               uint32_t timeoutMs) {
+  return talkAudioReadPcmConverted(out, maxSamples, timeoutMs, MIC_CVT_RAW);
+}
+
+int talkAudioReadPcmWakeTimeout(int16_t *out, int maxSamples,
+                                uint32_t timeoutMs) {
+  return talkAudioReadPcmConverted(out, maxSamples, timeoutMs, MIC_CVT_WAKE);
 }
 
 bool talkAudioWriteSilence(int samples, uint32_t timeoutMs) {

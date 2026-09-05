@@ -7,11 +7,15 @@
 
 struct AskState {
   static constexpr uint32_t kMagic = 0x41534B31u; // 'ASK1'
-  static constexpr uint16_t kVersion = 1;
+  static constexpr uint16_t kVersion = 2;
 
   uint32_t magic = kMagic;
   uint16_t version = kVersion;
   uint16_t reserved = 0;
+
+  /** Last ElevenLabs agent opened from the picker (empty = none yet). */
+  char lastAgentId[48] = {};
+  char lastAgentName[40] = {};
 };
 
 /**
@@ -36,6 +40,9 @@ public:
     addPage("Ask");
     self_ = this;
   }
+
+  /** Wake word: next open should skip the picker and start the last agent. */
+  static void requestWakeResume();
 
   void frame(Canvas &canvas, InputHub &input, float dt) override;
   bool goBack() override;
@@ -142,12 +149,24 @@ private:
   bool pendingStart_ = false;
   bool started_ = false;
   bool failed_ = false;
+  /** Set by requestWakeResume(); consumed on the next Ask open. */
+  static bool wakeResume_;
+  /**
+   * Talk was started via wake word (skip picker). Disconnect / end_call /
+   * Back should return to the launcher so wake listening resumes.
+   */
+  bool openedFromWake_ = false;
   char errMsg_[48] = {};
   uint32_t lastUiMs_ = 0;
 
   void openTalk(int index);
+  void openTalkAgent(const char *id, const char *name, bool replaceNav);
+  void rememberLastAgent(const char *id, const char *name);
+  bool tryWakeResume();
   void resetTalkState();
   void leaveTalk();
+  /** End talk and pop to agents, or open launcher when opened from wake. */
+  void exitTalkSession();
   void dismissImage();
   void noteImageInteraction();
   void clearSessionImages();

@@ -29,6 +29,13 @@ bool elAgentIsReady();
 bool elAgentIsSpeaking();
 
 /**
+ * True once after the agent hangs up via the system `end_call` tool (or a
+ * related server end signal). Consuming clears the latch so Ask can leave Talk
+ * without treating it as a transport failure.
+ */
+bool elAgentTakeEndedByAgent();
+
+/**
  * Select: mute agent playback and wait for ElevenLabs barge-in.
  * Clears the play ring only (I2S stays up). Speak after pressing — the server
  * sends `interruption` when it hears you; that is the official interrupt path.

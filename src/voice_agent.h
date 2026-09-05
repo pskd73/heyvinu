@@ -30,6 +30,9 @@ void voiceLoop();
 bool voiceActive();
 bool voiceReady();
 
+/** Latch for a clean agent hang-up (`end_call`); see elAgentTakeEndedByAgent. */
+bool voiceTakeEndedByAgent();
+
 const char *voiceStatus();
 const char *voiceLastUser();
 const char *voiceLastReply();
