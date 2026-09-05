@@ -254,6 +254,7 @@ bool talkContextSave(Storage *storage, const char *agentId,
 }
 
 bool talkContextClear(Storage *storage, const char *agentId) {
+  if (!storage || !storage->ready()) return false;
   char base[96];
   if (!contextBase(storage, agentId, base, sizeof(base))) return false;
   char metaPath[112];
@@ -262,21 +263,41 @@ bool talkContextClear(Storage *storage, const char *agentId) {
   snprintf(textPath, sizeof(textPath), "%s.txt", base);
 
   bool ok = true;
-  if (storage->exists(metaPath)) {
-    File f = storage->open(metaPath, FILE_WRITE);
-    if (!f) ok = false;
-    else {
-      f.print("{}");
-      f.close();
-    }
-  }
-  if (storage->exists(textPath)) {
-    File f = storage->open(textPath, FILE_WRITE);
-    if (!f) ok = false;
-    else {
-      f.print("");
-      f.close();
-    }
-  }
+  if (storage->exists(metaPath) && !storage->remove(metaPath)) ok = false;
+  if (storage->exists(textPath) && !storage->remove(textPath)) ok = false;
   return ok;
+}
+
+int talkContextList(Storage *storage, char *names, size_t nameLen,
+                    int maxCount) {
+  if (!storage || !storage->ready() || !names || nameLen < 2 || maxCount < 1) {
+    return 0;
+  }
+
+  File dir = storage->open(kContextDir);
+  if (!dir || !dir.isDirectory()) return 0;
+
+  int n = 0;
+  File f = dir.openNextFile();
+  while (f && n < maxCount) {
+    if (!f.isDirectory()) {
+      const char *raw = f.name();
+      // SD may return "foo.json" or "/chitram/context/foo.json".
+      const char *base = raw;
+      const char *slash = strrchr(raw, '/');
+      if (slash && slash[1]) base = slash + 1;
+      const size_t len = strlen(base);
+      if (len > 5 && strcasecmp(base + len - 5, ".json") == 0) {
+        const size_t stem = len - 5;
+        if (stem + 1 <= nameLen) {
+          char *dst = names + (size_t)n * nameLen;
+          memcpy(dst, base, stem);
+          dst[stem] = '\0';
+          n++;
+        }
+      }
+    }
+    f = dir.openNextFile();
+  }
+  return n;
 }

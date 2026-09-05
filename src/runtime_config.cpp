@@ -21,9 +21,13 @@ const Entry kEntries[Count] = {
      96, true},
     {ElevenlabsAgentId, "elevenlabs_agent_id", "ElevenLabs agent ID", 64,
      false},
+    {ImageProvider, "image_provider", "Image provider (elevenlabs|openrouter)",
+     16, false},
 };
 
-const uint16_t kStoreBytes = 64 + 64 + 160 + 96 + 96 + 64;
+const uint16_t kStoreBytes = 64 + 64 + 160 + 96 + 96 + 64 + 16;
+/** Pre-ImageProvider layout (for NVS migrate). */
+constexpr uint16_t kStoreBytesV1 = 64 + 64 + 160 + 96 + 96 + 64;
 
 Key keyFromName(const char *name) {
   const Entry *e = findEntry(name);
@@ -55,7 +59,7 @@ namespace {
 
 struct ConfigStore {
   static constexpr uint32_t kMagic = 0x43464731u; // 'CFG1'
-  static constexpr uint16_t kVersion = 1;
+  static constexpr uint16_t kVersion = 2;
 
   uint32_t magic = kMagic;
   uint16_t version = kVersion;
@@ -63,12 +67,17 @@ struct ConfigStore {
   char slots[Config::kStoreBytes];
 };
 
+/** Header + slots before ImageProvider was added. */
+constexpr size_t kV1StoreSize = 8 + Config::kStoreBytesV1;
+
 ConfigStore *gStore = nullptr;
+bool gStoreNeedsSave_ = false;
 
 static constexpr const char *kNvsNs = "chitramcfg";
 static constexpr const char *kNvsKey = "store";
 
 bool configLoadNvs(ConfigStore &out) {
+  gStoreNeedsSave_ = false;
   Preferences prefs;
   if (!prefs.begin(kNvsNs, /*readOnly=*/true)) {
     return false;
@@ -78,14 +87,46 @@ bool configLoadNvs(ConfigStore &out) {
     return false;
   }
   const size_t len = prefs.getBytesLength(kNvsKey);
-  if (len != sizeof(ConfigStore)) {
+
+  if (len == sizeof(ConfigStore)) {
+    const size_t got = prefs.getBytes(kNvsKey, &out, sizeof(out));
     prefs.end();
-    return false;
+    if (got != sizeof(out) || out.magic != ConfigStore::kMagic) return false;
+    if (out.version != ConfigStore::kVersion && out.version != 1) return false;
+    if (out.version == 1) {
+      out.version = ConfigStore::kVersion;
+      gStoreNeedsSave_ = true;
+    }
+    return true;
   }
-  const size_t got = prefs.getBytes(kNvsKey, &out, sizeof(out));
+
+  // Migrate v1 blob (no ImageProvider slot).
+  if (len == kV1StoreSize) {
+    uint8_t *raw = static_cast<uint8_t *>(malloc(kV1StoreSize));
+    if (!raw) {
+      prefs.end();
+      return false;
+    }
+    const size_t got = prefs.getBytes(kNvsKey, raw, kV1StoreSize);
+    prefs.end();
+    if (got != kV1StoreSize) {
+      free(raw);
+      return false;
+    }
+    memset(&out, 0, sizeof(out));
+    memcpy(&out, raw, kV1StoreSize);
+    free(raw);
+    if (out.magic != ConfigStore::kMagic) return false;
+    out.version = ConfigStore::kVersion;
+    strncpy(out.slots + Config::kStoreBytesV1, "openrouter", 15);
+    out.slots[Config::kStoreBytesV1 + 15] = '\0';
+    gStoreNeedsSave_ = true;
+    Serial.println("Config: migrated NVS store (+image_provider)");
+    return true;
+  }
+
   prefs.end();
-  return got == sizeof(out) && out.magic == ConfigStore::kMagic &&
-         out.version == ConfigStore::kVersion;
+  return false;
 }
 
 bool configSaveNvs() {
@@ -166,6 +207,8 @@ const char *compileDefault(Config::Key key) {
 #else
     return "";
 #endif
+  case Config::ImageProvider:
+    return "openrouter";
   default:
     return "";
   }
@@ -205,7 +248,20 @@ bool configInit() {
       Serial.println("Config: seeded defaults → NVS");
     }
   } else {
-    Serial.println("Config: loaded from NVS");
+    // Force OpenRouter while EL Flows is experimental for device use.
+    if (strcmp(slotPtr(Config::ImageProvider), "openrouter") != 0) {
+      copySlot(Config::ImageProvider, "openrouter");
+      gStoreNeedsSave_ = true;
+    }
+    if (gStoreNeedsSave_) {
+      if (!configSaveNvs()) {
+        Serial.println("Config: NVS migrate save failed (RAM ok)");
+      } else {
+        Serial.println("Config: loaded from NVS (updated)");
+      }
+    } else {
+      Serial.println("Config: loaded from NVS");
+    }
   }
   Serial.printf("Config dict ready (%u keys, %u B)\n", (unsigned)Config::Count,
                 (unsigned)sizeof(ConfigStore));

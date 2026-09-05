@@ -103,6 +103,42 @@ def patch_websockets(source, target, env):
         changed = True
         print("patch_websockets: added RX frame size log")
 
+    # Surface peer close code/reason — NODEBUG_WEBSOCKETS otherwise swallows it.
+    close_old = """            case WSop_close: {
+#ifndef NODEBUG_WEBSOCKETS
+                uint16_t reasonCode = 1000;
+                if(header->payloadLen >= 2) {
+                    reasonCode = payload[0] << 8 | payload[1];
+                }
+#endif
+                DEBUG_WEBSOCKETS("[WS][%d][handleWebsocket] get ask for close. Code: %d\\n", client->num, reasonCode);
+                if(header->payloadLen > 2) {
+                    DEBUG_WEBSOCKETS(" (%s)\\n", (payload + 2));
+                } else {
+                    DEBUG_WEBSOCKETS("\\n");
+                }
+                clientDisconnect(client, 1000);
+            } break;"""
+    if close_old in c and "[WS] peer close" not in c:
+        c = c.replace(
+            close_old,
+            """            case WSop_close: {
+                uint16_t reasonCode = 1000;
+                if(header->payloadLen >= 2) {
+                    reasonCode = (uint16_t)((payload[0] << 8) | payload[1]);
+                }
+                if(header->payloadLen > 2) {
+                    Serial.printf("[WS] peer close code=%u reason=%.*s\\n", reasonCode,
+                                 (int)(header->payloadLen - 2), (const char *)(payload + 2));
+                } else {
+                    Serial.printf("[WS] peer close code=%u\\n", reasonCode);
+                }
+                clientDisconnect(client, reasonCode);
+            } break;""",
+        )
+        changed = True
+        print("patch_websockets: log peer close code")
+
     # TX pack buffer → PSRAM. Only frames < 1400 bytes take this path, and it is
     # also the only path that masks: bigger frames ship an all-zero mask key.
     # TALK_MIC_CHUNK_SAMPLES is sized to keep us here.

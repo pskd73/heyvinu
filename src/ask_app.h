@@ -100,6 +100,7 @@ private:
   static constexpr int16_t kVolumeIconGap = 8;
   /** Images generated during the current talk session (SD paths). */
   static constexpr int kMaxSessionImages = 16;
+  /** Panel-sized fullscreen preview (UIImage). */
   static constexpr int16_t kPreviewW = 280;
   static constexpr int16_t kPreviewH = 240;
 

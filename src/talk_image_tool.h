@@ -6,9 +6,10 @@
 class Storage;
 
 /**
- * ElevenLabs client-tool adapter for OpenRouter image generation.
+ * ElevenLabs client-tool adapter for image generation (ElevenLabs Flows or
+ * OpenRouter via image_gen).
  *
- * Kept separate from `openrouter_image` (HTTP/SD) and from `talk_tools`
+ * Kept separate from backend HTTP modules and from `talk_tools`
  * builtins (`show_text`). Register once per talk session; poll from the WS
  * task to deliver `client_tool_result` when the job finishes.
  */

@@ -21,7 +21,6 @@ constexpr const char *kDefaultModel = "google/gemini-3.1-flash-image";
 constexpr const char *kDir = "/chitram";
 constexpr const char *kImgDir = "/chitram/images";
 constexpr uint32_t kHttpTimeoutMs = 180000;
-/** Panel169 landscape — preview Cover target. */
 constexpr int16_t kPreviewW = 280;
 constexpr int16_t kPreviewH = 240;
 

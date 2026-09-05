@@ -13,6 +13,8 @@ enum Key : uint8_t {
   DeepgramApiKey,
   ElevenlabsApiKey,
   ElevenlabsAgentId,
+  /** `openrouter` (forced for now) or `elevenlabs` — image gen backend. */
+  ImageProvider,
   Count,
 };
 

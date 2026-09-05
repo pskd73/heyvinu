@@ -1,7 +1,6 @@
 #include "talk_image_tool.h"
 
-#include "openrouter_image.h"
-#include "runtime_config.h"
+#include "image_gen.h"
 #include "talk_tools.h"
 
 #include <Flow32.h>
@@ -29,9 +28,7 @@ bool toolGenerateImage(JsonObjectConst params, char *resultOut,
 void talkImageToolReset() {
   pending_ = false;
   pendingCallId_[0] = '\0';
-  // Always reclaim — previously skipped while busy_, which wedged every later
-  // generate_image as "already running" across Talk reconnects.
-  orImageReset();
+  imageGenReset();
 }
 
 void talkImageToolSetStorage(Storage *storage) { storage_ = storage; }
@@ -49,7 +46,7 @@ bool talkImageToolStart(const char *toolCallId, JsonObjectConst params,
     snprintf(resultOut, resultLen, "missing tool_call_id");
     return false;
   }
-  if (pending_ || orImageBusy()) {
+  if (pending_ || imageGenBusy()) {
     snprintf(resultOut, resultLen, "image generation already running");
     return false;
   }
@@ -63,24 +60,18 @@ bool talkImageToolStart(const char *toolCallId, JsonObjectConst params,
   }
 
   const char *model = params["model"] | "";
-  const char *apiKey = getConfig(Config::OpenrouterApiKey);
-  if (!apiKey[0]) {
-    snprintf(resultOut, resultLen, "OpenRouter API key not configured");
-    return false;
-  }
   if (!storage_ || !storage_->ready()) {
     snprintf(resultOut, resultLen, "SD card not ready");
     return false;
   }
 
-  OrImageRequest req;
-  req.apiKey = apiKey;
+  ImageGenRequest req;
   req.prompt = prompt;
   req.model = model[0] ? model : nullptr;
   req.storage = storage_;
 
-  OrImageResult early{};
-  if (!orImageStart(req, &early)) {
+  ImageGenResult early{};
+  if (!imageGenStart(req, &early)) {
     snprintf(resultOut, resultLen, "%s",
              early.error[0] ? early.error : "start failed");
     return false;
@@ -91,15 +82,18 @@ bool talkImageToolStart(const char *toolCallId, JsonObjectConst params,
   pending_ = true;
   if (pending) *pending = true;
   snprintf(resultOut, resultLen, "started");
-  Serial.printf("[tool] generate_image started id=%s\n", pendingCallId_);
+  Serial.printf("[tool] generate_image started id=%s provider=%s\n",
+                pendingCallId_,
+                imageGenProvider() == ImageProvider::OpenRouter ? "openrouter"
+                                                                : "elevenlabs");
   return true;
 }
 
 bool talkImageToolTakeResult(char *callIdOut, size_t callIdLen,
                              char *resultOut, size_t resultLen, bool *isError) {
   if (!pending_) return false;
-  OrImageResult r{};
-  if (!orImageTakeResult(&r)) return false;
+  ImageGenResult r{};
+  if (!imageGenTakeResult(&r)) return false;
 
   pending_ = false;
   if (callIdOut && callIdLen) {
