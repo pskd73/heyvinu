@@ -42,11 +42,17 @@ static_assert(sizeof(SettingsStateV2) == 12, "SettingsState v2 size");
 
 class SettingsApp : public App<SettingsState> {
 public:
+  static constexpr uint8_t kPageMain = 0;
+  static constexpr uint8_t kPageClearContext = 1;
+  static constexpr int kMaxContexts = 12;
+  static constexpr size_t kContextNameLen = 48;
+
   explicit SettingsApp(const Rect &viewport, const char *name = "Settings",
                        const char *icon = "settings")
       : App(viewport) {
     setAppInfo(name, icon);
     addPage(name);
+    addPage("Clear context");
     self_ = this;
   }
 
@@ -73,8 +79,11 @@ public:
     cacheVisualise(on);
   }
 
+  void frame(Canvas &canvas, InputHub &input, float dt) override;
+
 protected:
   const char *nvsNamespace() const override { return "settings"; }
+  const char *pageTitle(uint8_t id) const override;
 
   void onOpen() override {
     self_ = this;
@@ -101,10 +110,18 @@ protected:
     if (self_ == this) self_ = nullptr;
   }
 
-  void build(Page &page, uint8_t /*pageId*/) override;
+  void build(Page &page, uint8_t pageId) override;
 
 private:
   static SettingsApp *self_;
+
+  char contextNames_[kMaxContexts][kContextNameLen] = {};
+  int contextCount_ = 0;
+  bool listFocusPending_ = false;
+
+  void refreshContextList();
+  void buildMain(Page &page);
+  void buildClearContext(Page &page);
 
   static void cacheVisualise(bool on) { settingsCacheVisualise(on); }
 
@@ -116,7 +133,6 @@ private:
     }
   }
 
-  /** v2 blob before Visualise (theme + volume only). */
   static bool loadValid(SettingsState *out, bool *upgraded) {
     if (upgraded) *upgraded = false;
     if (!out) return false;
@@ -143,7 +159,6 @@ private:
       return ok;
     }
 
-    // Upgrade v2 → v3 (keep theme/volume; Visualise defaults on).
     if (len == sizeof(SettingsStateV2)) {
       SettingsStateV2 v2{};
       const bool ok =
@@ -189,4 +204,6 @@ private:
 
   static void onThemeSelect(UISelect &s);
   static void onVisualiseChange(UIToggle &t);
+  static void onMainMenu(UISelect &s);
+  static void onClearContextSelect(UISelect &s);
 };

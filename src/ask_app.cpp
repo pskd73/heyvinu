@@ -1,8 +1,8 @@
 #include "ask_app.h"
 
 #include "audio_volume.h"
+#include "image_gen.h"
 #include "image_preview.h"
-#include "openrouter_image.h"
 #include "talk_agent.h"
 #include "talk_tools.h"
 
@@ -18,12 +18,12 @@ const char *AskApp::pageTitle(uint8_t id) const {
 
 uint8_t AskApp::shellStatusCount() const {
   if (pageId() != kPageTalk) return 0;
-  return orImageBusy() ? 2 : 1;
+  return imageGenBusy() ? 2 : 1;
 }
 
 const char *AskApp::shellStatusIcon(uint8_t i) const {
   if (pageId() != kPageTalk) return nullptr;
-  if (orImageBusy()) {
+  if (imageGenBusy()) {
     if (i == 0) return "images";
     if (i == 1) return "circle";
     return nullptr;
@@ -34,7 +34,7 @@ const char *AskApp::shellStatusIcon(uint8_t i) const {
 uint16_t AskApp::shellStatusColor(uint8_t i) const {
   if (pageId() != kPageTalk) return 0;
   const Theme::ThemeTokens &th = Theme::active();
-  if (orImageBusy() && i == 0) {
+  if (imageGenBusy() && i == 0) {
     return Theme::lerp(th.baseContent, th.base100, 0.35f);
   }
   return healthColor();

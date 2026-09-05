@@ -56,6 +56,8 @@ static char activeAgentId[48];
 static AppHost *sessionHost = nullptr;
 static TalkContext talkCtx{};
 static bool contextDirty = false;
+/** True if the last initiation included conversation_context. */
+static bool lastInitHadContext = false;
 
 static volatile bool pendingInit = false;
 static volatile int pendingPongId = -1;
@@ -380,80 +382,81 @@ static bool appendLit(char *dst, size_t cap, size_t *at, const char *s) {
 }
 
 static void sendInit() {
-  // Continuity: reinject prior turns as one dynamic_variable. The init JSON is
-  // escaped into PSRAM (txJsonBuf) so internal DRAM is not hit by a large String.
-  const char *text = (talkCtx.text && talkCtx.len) ? talkCtx.text : "";
-  const size_t textLen = talkCtx.len;
-  const bool hasCtx = textLen > 0 || talkCtx.conversationId[0];
+  // Continuity: each WS session is a *new* conversation. Reinject transcript
+  // text only via dynamic_variables. Never send previous_conversation_id.
+  const char *full = (talkCtx.text && talkCtx.len) ? talkCtx.text : "";
+  size_t fullLen = talkCtx.len;
+  const char *text = full;
+  size_t textLen = fullLen;
 
-  // Worst case ~6x expand for \uXXXX; budget in PSRAM.
+  constexpr size_t kMaxInitContext = 1800;
+  if (textLen > kMaxInitContext) {
+    size_t off = textLen - kMaxInitContext;
+    while (off < textLen && full[off] != '\n') off++;
+    if (off < textLen && full[off] == '\n') off++;
+    text = full + off;
+    textLen = textLen - off;
+  }
+
+  // Match the historically working payload exactly for a cold start. Building
+  // the same JSON in PSRAM (and adding user_id) correlated with immediate
+  // peer closes before agent-ready across every agent.
+  if (textLen == 0) {
+    lastInitHadContext = false;
+    logf("init fresh\n");
+    sendJson("{\"type\":\"conversation_initiation_client_data\"}");
+    logf("sent initiation bytes=47 (literal)\n");
+    return;
+  }
+
   const size_t need = 512 + textLen * 6;
   if (!ensureTxJson(need < 4096 ? 4096 : need)) {
-    logf("init OOM need=%u\n", (unsigned)need);
+    logf("init OOM need=%u — falling back to fresh\n", (unsigned)need);
+    lastInitHadContext = false;
+    sendJson("{\"type\":\"conversation_initiation_client_data\"}");
     return;
   }
 
   size_t at = 0;
   if (!appendLit(txJsonBuf, txJsonCap, &at,
                  "{\"type\":\"conversation_initiation_client_data\","
-                 "\"user_id\":\"chitram\"")) {
+                 "\"dynamic_variables\":{"
+                 "\"has_conversation_context\":\"true\","
+                 "\"conversation_context\":\"")) {
     logf("init build fail (head)\n");
     return;
   }
-
-  if (hasCtx) {
-    if (!appendLit(txJsonBuf, txJsonCap, &at, ",\"dynamic_variables\":{")) {
-      logf("init build fail (vars)\n");
-      return;
-    }
-    bool first = true;
-    if (textLen > 0) {
-      if (!appendLit(txJsonBuf, txJsonCap, &at,
-                     "\"has_conversation_context\":\"true\","
-                     "\"conversation_context\":\""))
-        return;
-      const size_t next =
-          jsonEscapeAppend(txJsonBuf, txJsonCap, at, text, textLen);
-      if (next == (size_t)-1) {
-        logf("init escape fail\n");
-        return;
-      }
-      at = next;
-      if (!appendLit(txJsonBuf, txJsonCap, &at, "\"")) return;
-      first = false;
-
-      logf("init continue len=%u prev=%s\n", (unsigned)textLen,
-           talkCtx.conversationId[0] ? talkCtx.conversationId : "-");
-      char preview[96];
-      size_t p = 0;
-      for (; p + 1 < sizeof(preview) && p < textLen && text[p] != '\n'; p++) {
-        preview[p] = text[p];
-      }
-      preview[p] = '\0';
-      logf("init context head: %s%s\n", preview, textLen > p ? "…" : "");
-    }
-    if (talkCtx.conversationId[0]) {
-      if (!first && !appendLit(txJsonBuf, txJsonCap, &at, ",")) return;
-      if (!appendLit(txJsonBuf, txJsonCap, &at,
-                     "\"previous_conversation_id\":\""))
-        return;
-      const size_t next =
-          jsonEscapeAppend(txJsonBuf, txJsonCap, at, talkCtx.conversationId,
-                           strlen(talkCtx.conversationId));
-      if (next == (size_t)-1) return;
-      at = next;
-      if (!appendLit(txJsonBuf, txJsonCap, &at, "\"")) return;
-      if (textLen == 0) {
-        logf("init continue len=0 prev=%s\n", talkCtx.conversationId);
-      }
-    }
-    if (!appendLit(txJsonBuf, txJsonCap, &at, "}")) return;
-  } else {
-    logf("init fresh\n");
+  const size_t next =
+      jsonEscapeAppend(txJsonBuf, txJsonCap, at, text, textLen);
+  if (next == (size_t)-1) {
+    logf("init escape fail — falling back to fresh\n");
+    lastInitHadContext = false;
+    sendJson("{\"type\":\"conversation_initiation_client_data\"}");
+    return;
   }
-  if (!appendLit(txJsonBuf, txJsonCap, &at, "}")) return;
-  sendJson(txJsonBuf);
-  logf("sent initiation bytes=%u (psram)\n", (unsigned)at);
+  at = next;
+  if (!appendLit(txJsonBuf, txJsonCap, &at, "\"}}")) return;
+
+  lastInitHadContext = true;
+  logf("init continue len=%u (of %u)\n", (unsigned)textLen, (unsigned)fullLen);
+  char preview[96];
+  size_t p = 0;
+  for (; p + 1 < sizeof(preview) && p < textLen && text[p] != '\n'; p++) {
+    preview[p] = text[p];
+  }
+  preview[p] = '\0';
+  logf("init context head: %s%s\n", preview, textLen > p ? "…" : "");
+
+  // Copy into DRAM for the first post-connect frame — some TLS paths have been
+  // flaky reading the initiation payload straight from PSRAM.
+  char stackInit[768];
+  if (at + 1 <= sizeof(stackInit)) {
+    memcpy(stackInit, txJsonBuf, at + 1);
+    sendJson(stackInit);
+  } else {
+    sendJson(txJsonBuf);
+  }
+  logf("sent initiation bytes=%u\n", (unsigned)at);
 }
 
 static void sendPong(int eventId) {
@@ -857,10 +860,26 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
     } else {
       logf("WS disconnected\n");
     }
+    if (!agentReady && lastInitHadContext) {
+      // Peer closed before conversation_initiation_metadata — almost always
+      // the continue payload (undeclared dynamic vars / oversized context).
+      // Drop saved context so the next Talk start uses init fresh.
+      logf("continue init rejected — clearing saved context for next start\n");
+      talkContextClear(sessionStorage(), sessionAgentId());
+      talkContextReset(&talkCtx);
+      contextDirty = false;
+      lastInitHadContext = false;
+      setStatus("Init rejected");
+    } else if (!agentReady) {
+      // Typical: close 3000 quota_exceeded (see [WS] peer close on serial).
+      logf("disconnect before agent ready\n");
+      setStatus("Out of credits");
+    } else {
+      setStatus("Disconnected");
+    }
     logMem("ws-off");
     agentReady = false;
     agentActive = false;
-    setStatus("Disconnected");
     break;
   case WStype_ERROR:
     logf("WS error len=%u\n", (unsigned)length);
