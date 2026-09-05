@@ -184,7 +184,7 @@ void AskApp::onStatusTick(UINode &node, float dt) {
   self->page().invalidateContent();
 }
 
-void AskApp::onAgentSelect(UISelect &sel) {
+void AskApp::onAgentSelect(UIGridSelect &sel) {
   if (!self_) {
     return;
   }
@@ -217,24 +217,28 @@ void AskApp::buildAgents(Page &page) {
   const Theme::ThemeTokens &th = Theme::active();
   const uint16_t muted = Theme::lerp(th.baseContent, th.base100, 0.4f);
 
-  // selected(-1): these rows are navigation, not a remembered radio choice.
-  auto &list = page.select()
+  // selected(-1): tiles are navigation, not a remembered radio choice.
+  auto &grid = page.gridSelect()
                    .selected(-1)
                    .onChange(onAgentSelect)
-                   .style(Style().setWidth(Length::Pct(100)).setGap(6));
+                   .style(Style()
+                              .setWidth(Length::Pct(100))
+                              .setColumns(2)
+                              .setGap(8));
   for (int i = 0; i < agentCount_; i++) {
-    list.add(page.selectOption()
+    const char *name = agents_[i].name[0] ? agents_[i].name : "Agent";
+    grid.add(page.gridSelectOption()
                  .icon("bot-message-square")
-                 .title(agents_[i].name)
+                 .title(name)
                  .value((int16_t)i));
   }
 
   auto &col = page.div().style(Style()
                                    .setWidth(Length::Pct(100))
-                                   .setPadding(Edges(16, 12))
+                                   .setPadding(Edges(12, 10))
                                    .setGap(10)
                                    .setColumns(1));
-  col.add(list);
+  col.add(grid);
   if (moreLine_[0]) {
     col.add(page.text(moreLine_)
                 .style(Style()

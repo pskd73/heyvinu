@@ -26,7 +26,7 @@ public:
   static constexpr uint8_t kPageAgents = 1;
   static constexpr uint8_t kPageTalk = 2;
 
-  /** UISelect holds 12 options, and the picker is meant to be one glance. */
+  /** Agent tiles in a 2-col UIGridSelect. */
   static constexpr int kMaxAgents = 12;
 
   explicit AskApp(const Rect &viewport) : App(viewport) {
@@ -87,7 +87,7 @@ private:
   void buildStatus(Page &page);
   void buildAgents(Page &page);
   static void onStatusTick(UINode &node, float dt);
-  static void onAgentSelect(UISelect &sel);
+  static void onAgentSelect(UIGridSelect &sel);
 
   // --- Live conversation ---
   /** One bar per step; 5 bars → 0/20/40/60/80/100%. */
