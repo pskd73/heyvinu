@@ -6,13 +6,13 @@
 #include "audio_volume.h"
 
 /**
- * System settings — theme + Visualise in NVS-backed state.
+ * System settings — theme + Visualise + Wake word in NVS-backed state.
  * Voice provider is Config::VoiceProvider (runtime NVS), edited here.
  * Volume lives in the same blob for boot restore; Talk adjusts it live.
  */
 struct SettingsState {
   static constexpr uint32_t kMagic = 0x53455431u; // 'SET1'
-  static constexpr uint16_t kVersion = 3;
+  static constexpr uint16_t kVersion = 4;
 
   uint32_t magic = kMagic;
   uint16_t version = kVersion;
@@ -24,12 +24,18 @@ struct SettingsState {
   int16_t volume = ChitramAudio::kVolumeDefault;
   /** 1 = Talk image tool enabled (default on). */
   int16_t visualise = 1;
+  /** 1 = Hey Luna wake listening on launcher (default on). */
+  int16_t wakeWord = 1;
 };
 
 /** Live Visualise flag for Talk (updated when Settings load/change). */
 bool settingsVisualiseEnabled();
 /** Seed / refresh the Live Visualise cache (boot + Settings). */
 void settingsCacheVisualise(bool on);
+
+/** Live Wake word flag for launcher (updated when Settings load/change). */
+bool settingsWakeWordEnabled();
+void settingsCacheWakeWord(bool on);
 
 /** Pre-Visualise settings blob (theme + volume). Used for NVS upgrade. */
 struct SettingsStateV2 {
@@ -40,6 +46,16 @@ struct SettingsStateV2 {
   int16_t volume = ChitramAudio::kVolumeDefault;
 };
 static_assert(sizeof(SettingsStateV2) == 12, "SettingsState v2 size");
+
+/** Pre-Wake-word settings blob (theme + volume + visualise). */
+struct SettingsStateV3 {
+  uint32_t magic = SettingsState::kMagic;
+  uint16_t version = 3;
+  uint16_t reserved = 0;
+  int16_t theme = 0;
+  int16_t volume = ChitramAudio::kVolumeDefault;
+  int16_t visualise = 1;
+};
 
 class SettingsApp : public App<SettingsState> {
 public:
@@ -80,6 +96,11 @@ public:
     cacheVisualise(on);
   }
 
+  void setWakeWord(bool on) {
+    set(data().wakeWord, on ? static_cast<int16_t>(1) : static_cast<int16_t>(0));
+    cacheWakeWord(on);
+  }
+
   void frame(Canvas &canvas, InputHub &input, float dt) override;
 
 protected:
@@ -102,9 +123,13 @@ protected:
     if (state().visualise != 0 && state().visualise != 1) {
       data().visualise = 1;
     }
+    if (state().wakeWord != 0 && state().wakeWord != 1) {
+      data().wakeWord = 1;
+    }
     applyThemeId(state().theme);
     ChitramAudio::setVolumePercent(state().volume);
     cacheVisualise(state().visualise != 0);
+    cacheWakeWord(state().wakeWord != 0);
   }
 
   void onClose() override {
@@ -125,6 +150,7 @@ private:
   void buildClearContext(Page &page);
 
   static void cacheVisualise(bool on) { settingsCacheVisualise(on); }
+  static void cacheWakeWord(bool on) { settingsCacheWakeWord(on); }
 
   static void applyThemeId(int16_t id) {
     if (id == 1) {
@@ -154,10 +180,31 @@ private:
           loaded.theme <= 1 &&
           loaded.volume >= ChitramAudio::kVolumeMin &&
           loaded.volume <= ChitramAudio::kVolumeMax &&
-          (loaded.visualise == 0 || loaded.visualise == 1);
+          (loaded.visualise == 0 || loaded.visualise == 1) &&
+          (loaded.wakeWord == 0 || loaded.wakeWord == 1);
       prefs.end();
       if (ok) *out = loaded;
       return ok;
+    }
+
+    if (len == sizeof(SettingsStateV3)) {
+      SettingsStateV3 v3{};
+      const bool ok =
+          prefs.getBytes("state", &v3, sizeof(v3)) == sizeof(v3) &&
+          v3.magic == SettingsState::kMagic && v3.version == 3 &&
+          v3.theme >= 0 && v3.theme <= 1 &&
+          v3.volume >= ChitramAudio::kVolumeMin &&
+          v3.volume <= ChitramAudio::kVolumeMax &&
+          (v3.visualise == 0 || v3.visualise == 1);
+      prefs.end();
+      if (!ok) return false;
+      *out = SettingsState{};
+      out->theme = v3.theme;
+      out->volume = v3.volume;
+      out->visualise = v3.visualise;
+      out->wakeWord = 1;
+      if (upgraded) *upgraded = true;
+      return true;
     }
 
     if (len == sizeof(SettingsStateV2)) {
@@ -174,6 +221,7 @@ private:
       out->theme = v2.theme;
       out->volume = v2.volume;
       out->visualise = 1;
+      out->wakeWord = 1;
       if (upgraded) *upgraded = true;
       return true;
     }
@@ -189,6 +237,7 @@ private:
       applyThemeId(loaded.theme);
       ChitramAudio::setVolumePercent(loaded.volume);
       cacheVisualise(loaded.visualise != 0);
+      cacheWakeWord(loaded.wakeWord != 0);
       if (upgraded) {
         Preferences prefs;
         if (prefs.begin("settings", /*readOnly=*/false)) {
@@ -200,11 +249,13 @@ private:
       applyThemeId(0);
       ChitramAudio::setVolumePercent(ChitramAudio::kVolumeDefault);
       cacheVisualise(true);
+      cacheWakeWord(true);
     }
   }
 
   static void onThemeSelect(UISelect &s);
   static void onVisualiseChange(UIToggle &t);
+  static void onWakeWordChange(UIToggle &t);
   static void onVoiceProviderSelect(UISelect &s);
   static void onMainMenu(UISelect &s);
   static void onClearContextSelect(UISelect &s);

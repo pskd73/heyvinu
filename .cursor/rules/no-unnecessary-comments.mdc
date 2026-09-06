@@ -1,0 +1,23 @@
+---
+description: Avoid unnecessary code comments
+alwaysApply: true
+---
+
+# No unnecessary comments
+
+Do not add comments that restate what the code already says.
+
+```cpp
+// ❌ BAD
+// Increment the counter
+count++;
+
+// Set status to loading
+setStatus("Loading");
+
+// ✅ GOOD — only when the why is non-obvious
+// Defer decode one frame so "Loading" can paint first
+pendingLoad_ = true;
+```
+
+Prefer clear names and structure over commentary. Keep comments rare: non-obvious invariants, workarounds, or external protocol constraints only.

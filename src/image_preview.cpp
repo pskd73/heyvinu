@@ -535,7 +535,7 @@ bool imagePreviewSidecarPath(char *out, size_t outLen, const char *srcAbs) {
 }
 
 bool imagePreviewLoad(Storage *storage, const char *absPath, int16_t maxW,
-                      int16_t maxH) {
+                      int16_t maxH, bool writeSidecar) {
   imagePreviewClear();
   if (!storage || !storage->ready() || !absPath || !absPath[0]) return false;
   if (maxW < 8 || maxH < 8) return false;
@@ -574,7 +574,7 @@ bool imagePreviewLoad(Storage *storage, const char *absPath, int16_t maxW,
   Serial.printf("[preview] ready %dx%d (%s%s) gen=%u\n", pixW_, pixH_, path_,
                 fromSidecar ? " via sidecar" : "", (unsigned)gen_);
 
-  if (!fromSidecar && !isPreviewSidecarPath(canonical)) {
+  if (writeSidecar && !fromSidecar && !isPreviewSidecarPath(canonical)) {
     scheduleSidecarSave(storage, canonical);
   }
   return true;

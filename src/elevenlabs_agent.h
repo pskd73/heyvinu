@@ -64,6 +64,9 @@ enum class ElHealth : uint8_t {
 
 ElHealth elAgentHealth();
 
+/** Active Talk agent id, or configured default; empty if unset. */
+const char *elAgentActiveId();
+
 const char *elAgentStatus();
 const char *elAgentLastUser();
 const char *elAgentLastReply();

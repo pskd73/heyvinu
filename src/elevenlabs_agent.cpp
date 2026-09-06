@@ -1336,6 +1336,10 @@ ElHealth elAgentHealth() {
 }
 
 const char *elAgentStatus() { return statusBuf; }
+const char *elAgentActiveId() {
+  const char *id = sessionAgentId();
+  return id ? id : "";
+}
 const char *elAgentLastUser() { return lastUserBuf; }
 const char *elAgentLastReply() { return lastReplyBuf; }
 

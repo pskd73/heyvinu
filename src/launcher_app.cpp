@@ -1,6 +1,7 @@
 #include "launcher_app.h"
 
 #include "ask_app.h"
+#include "settings_app.h"
 #include "wake_word.h"
 
 #include <string.h>
@@ -13,7 +14,11 @@ void LauncherApp::onOpen() {
       state().version != LauncherState::kVersion) {
     data() = LauncherState{};
   }
-  wakeWordStart(host());
+  if (settingsWakeWordEnabled()) {
+    wakeWordStart(host());
+  } else {
+    wakeWordStop();
+  }
 }
 
 void LauncherApp::onClose() {

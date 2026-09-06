@@ -1,5 +1,7 @@
 #include "openrouter_image.h"
 
+#include "elevenlabs_agent.h"
+#include "gallery_catalog.h"
 #include "image_preview.h"
 
 #include <Flow32.h>
@@ -519,6 +521,13 @@ void finish(bool ok, const char *path, const char *error) {
     snprintf(s, sizeof(s), "Saved %s", path ? path : "");
     setStatus(s);
     Serial.printf("[or-image] OK %s\n", path ? path : "");
+    if (path && path[0] && storage_) {
+      GalleryCatalogMeta meta;
+      meta.agentId = elAgentActiveId();
+      meta.description = prompt_;
+      meta.provider = "openrouter";
+      (void)galleryCatalogAdd(storage_, path, meta);
+    }
   } else {
     setStatus(error && error[0] ? error : "Image failed");
     Serial.printf("[or-image] FAIL: %s\n", error && error[0] ? error : "?");

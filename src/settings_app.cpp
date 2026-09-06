@@ -10,11 +10,16 @@ SettingsApp *SettingsApp::self_ = nullptr;
 
 namespace {
 bool gVisualiseEnabled = true;
+bool gWakeWordEnabled = true;
 }
 
 bool settingsVisualiseEnabled() { return gVisualiseEnabled; }
 
 void settingsCacheVisualise(bool on) { gVisualiseEnabled = on; }
+
+bool settingsWakeWordEnabled() { return gWakeWordEnabled; }
+
+void settingsCacheWakeWord(bool on) { gWakeWordEnabled = on; }
 
 const char *SettingsApp::pageTitle(uint8_t id) const {
   if (id == kPageClearContext) return "Clear context";
@@ -41,6 +46,12 @@ void SettingsApp::onVisualiseChange(UIToggle &t) {
   if (!self_) return;
   self_->setVisualise(t.checked());
   Serial.printf("Settings: visualise=%d\n", t.checked() ? 1 : 0);
+}
+
+void SettingsApp::onWakeWordChange(UIToggle &t) {
+  if (!self_) return;
+  self_->setWakeWord(t.checked());
+  Serial.printf("Settings: wake_word=%d\n", t.checked() ? 1 : 0);
 }
 
 void SettingsApp::onVoiceProviderSelect(UISelect &s) {
@@ -166,6 +177,27 @@ void SettingsApp::buildMain(Page &page) {
                               .setWidth(Length::Px(52))
                               .setHeight(Length::Px(30))));
 
+  auto &wakeRow =
+      page.div()
+          .style(Style()
+                     .setWidth(Length::Pct(100))
+                     .setHeight(Length::Px(30)))
+          .add(page.text("Wake word")
+                   .style(Style()
+                              .setPosition(Position::Absolute)
+                              .setLeft(Length::Px(0))
+                              .setFont(FontRole::Small)
+                              .setColor(th.baseContent)
+                              .setAlign(Align::Start)))
+          .add(page.toggle()
+                   .checked(st.wakeWord != 0)
+                   .onChange(onWakeWordChange)
+                   .style(Style()
+                              .setPosition(Position::Absolute)
+                              .setRight(Length::Px(0))
+                              .setWidth(Length::Px(52))
+                              .setHeight(Length::Px(30))));
+
   auto &tools =
       page.select()
           .onChange(onMainMenu)
@@ -197,6 +229,7 @@ void SettingsApp::buildMain(Page &page) {
                         .add(sectionLabel("AI"))
                         .add(voiceChooser)
                         .add(vizRow)
+                        .add(wakeRow)
                         .add(tools)));
 }
 

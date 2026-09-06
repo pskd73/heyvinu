@@ -64,7 +64,24 @@ inline void ensureNvsDefaults() {
              settings.theme >= 0 && settings.theme <= 1 &&
              settings.volume >= ChitramAudio::kVolumeMin &&
              settings.volume <= ChitramAudio::kVolumeMax &&
-             (settings.visualise == 0 || settings.visualise == 1);
+             (settings.visualise == 0 || settings.visualise == 1) &&
+             (settings.wakeWord == 0 || settings.wakeWord == 1);
+      } else if (len == sizeof(SettingsStateV3)) {
+        SettingsStateV3 v3{};
+        if (prefs.getBytes("state", &v3, sizeof(v3)) == sizeof(v3) &&
+            v3.magic == SettingsState::kMagic && v3.version == 3 &&
+            v3.theme >= 0 && v3.theme <= 1 &&
+            v3.volume >= ChitramAudio::kVolumeMin &&
+            v3.volume <= ChitramAudio::kVolumeMax &&
+            (v3.visualise == 0 || v3.visualise == 1)) {
+          settings = SettingsState{};
+          settings.theme = v3.theme;
+          settings.volume = v3.volume;
+          settings.visualise = v3.visualise;
+          settings.wakeWord = 1;
+          ok = true;
+          upgraded = true;
+        }
       } else if (len == sizeof(SettingsStateV2)) {
         SettingsStateV2 v2{};
         if (prefs.getBytes("state", &v2, sizeof(v2)) == sizeof(v2) &&
@@ -76,6 +93,7 @@ inline void ensureNvsDefaults() {
           settings.theme = v2.theme;
           settings.volume = v2.volume;
           settings.visualise = 1;
+          settings.wakeWord = 1;
           ok = true;
           upgraded = true;
         }
@@ -99,4 +117,5 @@ inline void ensureNvsDefaults() {
                                        : Theme::FlowTheme());
   ChitramAudio::setVolumePercent(settings.volume);
   settingsCacheVisualise(settings.visualise != 0);
+  settingsCacheWakeWord(settings.wakeWord != 0);
 }
