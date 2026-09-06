@@ -556,6 +556,16 @@ static void handleClientToolCall(JsonDocument &doc) {
   const bool expects = call["expects_response"] | true;
   JsonVariantConst params = call["parameters"];
 
+  // Some agents deliver system end_call as client_tool_call instead of
+  // agent_tool_response. Acknowledge then hang up after farewell audio drains.
+  if (!strcmp(name, "end_call")) {
+    logf("tool end_call id=%s expects=%d (client_tool_call)\n",
+         id[0] ? id : "?", expects ? 1 : 0);
+    if (expects) sendToolResult(id, "ended", /*isError=*/false);
+    scheduleEndCall("end_call");
+    return;
+  }
+
   // Async tools (image gen): start work and reply later from the WS task so
   // we do not block pings / mic uplink for tens of seconds.
   if (!strcmp(name, "generate_image")) {

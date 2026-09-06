@@ -375,8 +375,11 @@ void AskApp::exitTalkSession() {
   leaveTalk();
   if (toLauncher) {
     if (host()) host()->openLauncher();
-  } else {
-    back();
+    return;
+  }
+  // Picker Push → agents. Replace (wake / single-page) → launcher.
+  if (!back() && host()) {
+    host()->openLauncher();
   }
 }
 
@@ -612,19 +615,10 @@ void AskApp::onTalkTick(UINode &node, float dt) {
   self->runPendingGalleryLoad();
 
   if (self->started_ && !self->failed_) {
-    // Agent hung up, or transport died after a wake-started call — leave Talk.
-    // Wake path returns to the launcher so listening can arm again.
-    if (voiceTakeEndedByAgent()) {
+    // Any clean hang-up or transport drop leaves Talk — never sit on "Idle".
+    if (voiceTakeEndedByAgent() || !voiceActive()) {
       self->exitTalkSession();
       return;
-    }
-    if (!voiceActive()) {
-      if (self->openedFromWake_) {
-        self->exitTalkSession();
-        return;
-      }
-      self->failed_ = true;
-      snprintf(self->errMsg_, sizeof(self->errMsg_), "%s", voiceStatus());
     }
   }
 
