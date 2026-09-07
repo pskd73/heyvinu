@@ -4,7 +4,7 @@
 
 /**
  * Home launcher — horizontal carousel of installed apps (one at a time).
- * While open, listens for "Hey Luna" and opens the last Ask agent.
+ * While open, listens for "Hey Vinu" and opens the last Ask agent.
  */
 struct LauncherState {
   static constexpr uint32_t kMagic = 0x4C4E4352u; // 'LNCR'

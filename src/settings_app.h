@@ -7,7 +7,6 @@
 
 /**
  * System settings — theme + Visualise + Wake word in NVS-backed state.
- * Voice provider is Config::VoiceProvider (runtime NVS), edited here.
  * Volume lives in the same blob for boot restore; Talk adjusts it live.
  */
 struct SettingsState {
@@ -21,10 +20,10 @@ struct SettingsState {
   /** 0 = Flow (dark), 1 = Winter (light). */
   int16_t theme = 0;
   /** Speaker level 0–100 (default 75 ≈ previous 1.5× gain). */
-  int16_t volume = ChitramAudio::kVolumeDefault;
+  int16_t volume = HeyvinuAudio::kVolumeDefault;
   /** 1 = Talk image tool enabled (default on). */
   int16_t visualise = 1;
-  /** 1 = Hey Luna wake listening on launcher (default on). */
+  /** 1 = Hey Vinu wake listening on launcher (default on). */
   int16_t wakeWord = 1;
 };
 
@@ -43,7 +42,7 @@ struct SettingsStateV2 {
   uint16_t version = 2;
   uint16_t reserved = 0;
   int16_t theme = 0;
-  int16_t volume = ChitramAudio::kVolumeDefault;
+  int16_t volume = HeyvinuAudio::kVolumeDefault;
 };
 static_assert(sizeof(SettingsStateV2) == 12, "SettingsState v2 size");
 
@@ -53,7 +52,7 @@ struct SettingsStateV3 {
   uint16_t version = 3;
   uint16_t reserved = 0;
   int16_t theme = 0;
-  int16_t volume = ChitramAudio::kVolumeDefault;
+  int16_t volume = HeyvinuAudio::kVolumeDefault;
   int16_t visualise = 1;
 };
 
@@ -85,10 +84,10 @@ public:
   }
 
   void setVolume(int16_t percent) {
-    if (percent < ChitramAudio::kVolumeMin) percent = ChitramAudio::kVolumeMin;
-    if (percent > ChitramAudio::kVolumeMax) percent = ChitramAudio::kVolumeMax;
+    if (percent < HeyvinuAudio::kVolumeMin) percent = HeyvinuAudio::kVolumeMin;
+    if (percent > HeyvinuAudio::kVolumeMax) percent = HeyvinuAudio::kVolumeMax;
     set(data().volume, percent);
-    ChitramAudio::setVolumePercent(percent);
+    HeyvinuAudio::setVolumePercent(percent);
   }
 
   void setVisualise(bool on) {
@@ -116,9 +115,9 @@ protected:
     if (state().theme < 0 || state().theme > 1) {
       data().theme = 0;
     }
-    if (state().volume < ChitramAudio::kVolumeMin ||
-        state().volume > ChitramAudio::kVolumeMax) {
-      data().volume = ChitramAudio::kVolumeDefault;
+    if (state().volume < HeyvinuAudio::kVolumeMin ||
+        state().volume > HeyvinuAudio::kVolumeMax) {
+      data().volume = HeyvinuAudio::kVolumeDefault;
     }
     if (state().visualise != 0 && state().visualise != 1) {
       data().visualise = 1;
@@ -127,7 +126,7 @@ protected:
       data().wakeWord = 1;
     }
     applyThemeId(state().theme);
-    ChitramAudio::setVolumePercent(state().volume);
+    HeyvinuAudio::setVolumePercent(state().volume);
     cacheVisualise(state().visualise != 0);
     cacheWakeWord(state().wakeWord != 0);
   }
@@ -178,8 +177,8 @@ private:
           loaded.magic == SettingsState::kMagic &&
           loaded.version == SettingsState::kVersion && loaded.theme >= 0 &&
           loaded.theme <= 1 &&
-          loaded.volume >= ChitramAudio::kVolumeMin &&
-          loaded.volume <= ChitramAudio::kVolumeMax &&
+          loaded.volume >= HeyvinuAudio::kVolumeMin &&
+          loaded.volume <= HeyvinuAudio::kVolumeMax &&
           (loaded.visualise == 0 || loaded.visualise == 1) &&
           (loaded.wakeWord == 0 || loaded.wakeWord == 1);
       prefs.end();
@@ -193,8 +192,8 @@ private:
           prefs.getBytes("state", &v3, sizeof(v3)) == sizeof(v3) &&
           v3.magic == SettingsState::kMagic && v3.version == 3 &&
           v3.theme >= 0 && v3.theme <= 1 &&
-          v3.volume >= ChitramAudio::kVolumeMin &&
-          v3.volume <= ChitramAudio::kVolumeMax &&
+          v3.volume >= HeyvinuAudio::kVolumeMin &&
+          v3.volume <= HeyvinuAudio::kVolumeMax &&
           (v3.visualise == 0 || v3.visualise == 1);
       prefs.end();
       if (!ok) return false;
@@ -213,8 +212,8 @@ private:
           prefs.getBytes("state", &v2, sizeof(v2)) == sizeof(v2) &&
           v2.magic == SettingsState::kMagic && v2.version == 2 &&
           v2.theme >= 0 && v2.theme <= 1 &&
-          v2.volume >= ChitramAudio::kVolumeMin &&
-          v2.volume <= ChitramAudio::kVolumeMax;
+          v2.volume >= HeyvinuAudio::kVolumeMin &&
+          v2.volume <= HeyvinuAudio::kVolumeMax;
       prefs.end();
       if (!ok) return false;
       *out = SettingsState{};
@@ -235,7 +234,7 @@ private:
     bool upgraded = false;
     if (loadValid(&loaded, &upgraded)) {
       applyThemeId(loaded.theme);
-      ChitramAudio::setVolumePercent(loaded.volume);
+      HeyvinuAudio::setVolumePercent(loaded.volume);
       cacheVisualise(loaded.visualise != 0);
       cacheWakeWord(loaded.wakeWord != 0);
       if (upgraded) {
@@ -247,7 +246,7 @@ private:
       }
     } else {
       applyThemeId(0);
-      ChitramAudio::setVolumePercent(ChitramAudio::kVolumeDefault);
+      HeyvinuAudio::setVolumePercent(HeyvinuAudio::kVolumeDefault);
       cacheVisualise(true);
       cacheWakeWord(true);
     }
@@ -256,7 +255,6 @@ private:
   static void onThemeSelect(UISelect &s);
   static void onVisualiseChange(UIToggle &t);
   static void onWakeWordChange(UIToggle &t);
-  static void onVoiceProviderSelect(UISelect &s);
   static void onMainMenu(UISelect &s);
   static void onClearContextSelect(UISelect &s);
 };

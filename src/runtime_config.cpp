@@ -79,7 +79,7 @@ constexpr size_t kV2StoreSize = 8 + Config::kStoreBytesV2;
 ConfigStore *gStore = nullptr;
 bool gStoreNeedsSave_ = false;
 
-static constexpr const char *kNvsNs = "chitramcfg";
+static constexpr const char *kNvsNs = "heyvinucfg";
 static constexpr const char *kNvsKey = "store";
 
 bool configLoadNvs(ConfigStore &out) {

@@ -61,10 +61,10 @@ uint16_t Max17048::readReg(uint8_t reg, bool *ok) {
 }
 
 bool Max17048::begin() {
-  Wire.begin(ChitramI2c::kSda, ChitramI2c::kScl);
+  Wire.begin(HeyvinuI2c::kSda, HeyvinuI2c::kScl);
   Wire.setClock(100000);
 
-  addr_ = ChitramI2c::kGaugeAddr;
+  addr_ = HeyvinuI2c::kGaugeAddr;
   ready_ = probe(addr_);
   if (ready_) {
     Serial.printf("Gauge: MAX17048 @ 0x%02X\n", addr_);

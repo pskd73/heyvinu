@@ -264,7 +264,7 @@ bool talkAudioWritePcmTimeout(const int16_t *data, int samples,
   while (left > 0) {
     int n = left > TALK_I2S_BUF_SAMPLES ? TALK_I2S_BUF_SAMPLES : left;
     for (int i = 0; i < n; i++) {
-      const int16_t s = ChitramAudio::applyVolume(data[off + i]);
+      const int16_t s = HeyvinuAudio::applyVolume(data[off + i]);
       packed[i] = ((int32_t)s) << 16;
     }
     size_t written = 0;

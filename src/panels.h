@@ -7,7 +7,7 @@
 /**
  * 1.83" rounded IPS — 240×284 visible (Panel183 / ST7789).
  *
- * Chitram J2 wiring:
+ * Heyvinu J2 wiring:
  *
  *   LCD    ESP32-S3
  *   ----   --------
@@ -48,7 +48,7 @@ inline DisplayPanel Panel183() {
  * Same class as Waveshare 1.69" / Robu R257187. Controller GRAM is 240×320;
  * visible area starts at row 20 (panelYOffset).
  *
- * Chitram J2 wiring (unchanged from Panel183):
+ * Heyvinu J2 wiring (unchanged from Panel183):
  *
  *   LCD    ESP32-S3
  *   ----   --------

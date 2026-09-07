@@ -1,9 +1,9 @@
 {
   "type": "micro",
-  "wake_word": "Hey Luna",
+  "wake_word": "Hey Vinu",
   "author": "microwakeword.com",
   "website": "https://microwakeword.com",
-  "model": "./hey_luna.tflite",
+  "model": "./hey_vinu.tflite",
   "trained_languages": [
     "en"
   ],

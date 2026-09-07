@@ -11,8 +11,8 @@
 
 namespace {
 
-constexpr const char *kImgDir = "/chitram/images";
-constexpr const char *kCatalogPath = "/chitram/images/catalog.jsonl";
+constexpr const char *kImgDir = "/heyvinu/images";
+constexpr const char *kCatalogPath = "/heyvinu/images/catalog.jsonl";
 
 void *psramOrRam(size_t n) {
   void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

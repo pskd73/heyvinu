@@ -9,7 +9,7 @@ class AppHost;
  * Deepgram Voice Agent — single WS for STT + LLM + TTS.
  * wss://agent.deepgram.com/v1/agent/converse
  *
- * Continuity: host->storage() holds /chitram/context/deepgram.* and is
+ * Continuity: host->storage() holds /heyvinu/context/deepgram.* and is
  * reinjected via agent.context.messages on Settings (see voice_context).
  *
  * Client tools: `show_text` / `generate_image` via FunctionCallRequest →

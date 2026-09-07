@@ -124,7 +124,7 @@ void LauncherApp::build(Page &page, uint8_t /*pageId*/) {
                              .setAlignV(Align::Center))
                   .add(page.text("No apps").style(
                       Style()
-                          .setFont(FontRole::Body)
+                          .setFont(FontRole::Title)
                           .setColor(muted)
                           .setAlign(Align::Center)
                           .setWidth(Length::Pct(100))));
@@ -151,7 +151,7 @@ void LauncherApp::build(Page &page, uint8_t /*pageId*/) {
                           .setWidth(Length::Pct(100))))
                   .add(page.text(name).style(
                       Style()
-                          .setFont(FontRole::Body)
+                          .setFont(FontRole::Title)
                           .setColor(th.baseContent)
                           .setAlign(Align::Center)
                           .setWidth(Length::Pct(100))));

@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <math.h>
 
-namespace ChitramAudio {
+namespace HeyvinuAudio {
 namespace {
 
 int16_t gVolumePercent = kVolumeDefault;
@@ -42,4 +42,4 @@ int16_t applyVolume(int16_t sample) {
   return static_cast<int16_t>(v);
 }
 
-} // namespace ChitramAudio
+} // namespace HeyvinuAudio

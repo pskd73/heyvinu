@@ -16,9 +16,13 @@
 #include "test_app.h"
 #include "remote_app.h"
 #include "runtime_config.h"
+#include "fonts/Englebert16aa.h"
+#include "fonts/Englebert22aa.h"
+#include "fonts/Englebert34aa.h"
 
 static const DisplayPanel kPanel = Panel169();
 static const Rect kPanelRect(0, 0, kPanel.width, kPanel.height);
+static Page splashPage(kPanelRect);
 
 static LauncherApp launcher(kPanelRect);
 static SettingsApp settings(kPanelRect);
@@ -26,8 +30,8 @@ static AskApp ask(kPanelRect);
 static GalleryApp gallery(kPanelRect);
 static TestApp test(kPanelRect);
 static RemoteApp remote(kPanelRect);
-static JoystickInput joystick(ChitramInput::kJoyPinX, ChitramInput::kJoyPinY,
-                              ChitramInput::kJoyPinSw);
+static JoystickInput joystick(HeyvinuInput::kJoyPinX, HeyvinuInput::kJoyPinY,
+                              HeyvinuInput::kJoyPinSw);
 static Flow32 flow(kPanel);
 
 void setup() {
@@ -40,21 +44,23 @@ void setup() {
 
   configInit();
 
-  JoystickInput::initAdcEarly(ChitramInput::kJoyPinX, ChitramInput::kJoyPinY);
-  ChitramAudio::initVolume();
+  JoystickInput::initAdcEarly(HeyvinuInput::kJoyPinX, HeyvinuInput::kJoyPinY);
+  HeyvinuAudio::initVolume();
   Battery::begin();
 
-  joystick.deadzone = ChitramInput::kJoyDeadzone;
-  joystick.tracker().holdDelayMs = ChitramInput::kJoyHoldDelayMs;
-  joystick.tracker().holdRepeatMs = ChitramInput::kJoyHoldRepeatMs;
+  joystick.deadzone = HeyvinuInput::kJoyDeadzone;
+  joystick.tracker().holdDelayMs = HeyvinuInput::kJoyHoldDelayMs;
+  joystick.tracker().holdRepeatMs = HeyvinuInput::kJoyHoldRepeatMs;
 
   flow.apps({&launcher, &settings, &ask, &gallery, &remote, &test})
       .config(FlowConfig{}
                   .theme(Theme::FlowTheme())
-                  .storage(SdChitram())
+                  .storage(SdHeyvinu())
                   .debugBorders(false)
-                  .idleEyes(30))
+                  .idleEyes(30)
+                  .splash(splashPage, 5, "/logo/logo-dark-compressed-sm.png"))
       .input(joystick)
+      .titleFonts(&Englebert16aa, &Englebert22aa, &Englebert34aa)
       .begin();
 }
 

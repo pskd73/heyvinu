@@ -41,7 +41,7 @@ inline bool loadNvsBlob(const char *ns, S *out) {
 
 } // namespace
 
-/** Seed NVS defaults for all Chitram apps and apply the Flow theme. */
+/** Seed NVS defaults for all Heyvinu apps and apply the Flow theme. */
 inline void ensureNvsDefaults() {
   ensureNvsBlob("settings", SettingsState{});
   ensureNvsBlob("launch", LauncherState{});
@@ -62,8 +62,8 @@ inline void ensureNvsDefaults() {
              settings.magic == SettingsState::kMagic &&
              settings.version == SettingsState::kVersion &&
              settings.theme >= 0 && settings.theme <= 1 &&
-             settings.volume >= ChitramAudio::kVolumeMin &&
-             settings.volume <= ChitramAudio::kVolumeMax &&
+             settings.volume >= HeyvinuAudio::kVolumeMin &&
+             settings.volume <= HeyvinuAudio::kVolumeMax &&
              (settings.visualise == 0 || settings.visualise == 1) &&
              (settings.wakeWord == 0 || settings.wakeWord == 1);
       } else if (len == sizeof(SettingsStateV3)) {
@@ -71,8 +71,8 @@ inline void ensureNvsDefaults() {
         if (prefs.getBytes("state", &v3, sizeof(v3)) == sizeof(v3) &&
             v3.magic == SettingsState::kMagic && v3.version == 3 &&
             v3.theme >= 0 && v3.theme <= 1 &&
-            v3.volume >= ChitramAudio::kVolumeMin &&
-            v3.volume <= ChitramAudio::kVolumeMax &&
+            v3.volume >= HeyvinuAudio::kVolumeMin &&
+            v3.volume <= HeyvinuAudio::kVolumeMax &&
             (v3.visualise == 0 || v3.visualise == 1)) {
           settings = SettingsState{};
           settings.theme = v3.theme;
@@ -87,8 +87,8 @@ inline void ensureNvsDefaults() {
         if (prefs.getBytes("state", &v2, sizeof(v2)) == sizeof(v2) &&
             v2.magic == SettingsState::kMagic && v2.version == 2 &&
             v2.theme >= 0 && v2.theme <= 1 &&
-            v2.volume >= ChitramAudio::kVolumeMin &&
-            v2.volume <= ChitramAudio::kVolumeMax) {
+            v2.volume >= HeyvinuAudio::kVolumeMin &&
+            v2.volume <= HeyvinuAudio::kVolumeMax) {
           settings = SettingsState{};
           settings.theme = v2.theme;
           settings.volume = v2.volume;
@@ -115,7 +115,7 @@ inline void ensureNvsDefaults() {
 
   Theme::setActive(settings.theme == 1 ? Theme::WinterTheme()
                                        : Theme::FlowTheme());
-  ChitramAudio::setVolumePercent(settings.volume);
+  HeyvinuAudio::setVolumePercent(settings.volume);
   settingsCacheVisualise(settings.visualise != 0);
   settingsCacheWakeWord(settings.wakeWord != 0);
 }

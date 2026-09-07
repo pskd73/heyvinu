@@ -9,7 +9,7 @@ class Storage;
  * OpenRouter image generation — independent of Talk / ElevenLabs.
  *
  * POST https://openrouter.ai/api/v1/images → decode b64 → save under
- * /chitram/images/ on the SD card. Runs on its own FreeRTOS task so callers
+ * /heyvinu/images/ on the SD card. Runs on its own FreeRTOS task so callers
  * (e.g. a client tool) are not blocked for tens of seconds.
  */
 

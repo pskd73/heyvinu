@@ -5,7 +5,7 @@
 
 class Storage;
 
-/** Newest-last JSONL at `/chitram/images/catalog.jsonl`. */
+/** Newest-last JSONL at `/heyvinu/images/catalog.jsonl`. */
 struct GalleryCatalogMeta {
   const char *agentId = nullptr;
   const char *description = nullptr;

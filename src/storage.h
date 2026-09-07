@@ -2,10 +2,10 @@
 
 #include <Flow32.h>
 
-/** Chitram J1 — 1-bit SDMMC (CLK=39, CMD=38, D0=40). */
-inline StorageConfig SdChitram() {
+/** Heyvinu J1 — 1-bit SDMMC (CLK=39, CMD=38, D0=40). */
+inline StorageConfig SdHeyvinu() {
   StorageConfig c;
-  c.id = "Chitram-J1";
+  c.id = "Heyvinu-J1";
   c.bus = SdBus::Sdmmc;
   c.mountPoint = "/sdcard";
   c.pinClk = 39;

@@ -120,10 +120,10 @@ bool initI2sDuplex() {
   }
 
   i2s_pin_config_t pins = {};
-  pins.bck_io_num = ChitramAudio::kI2sBclk;
-  pins.ws_io_num = ChitramAudio::kI2sWs;
-  pins.data_out_num = ChitramAudio::kI2sDout;
-  pins.data_in_num = ChitramAudio::kI2sDin;
+  pins.bck_io_num = HeyvinuAudio::kI2sBclk;
+  pins.ws_io_num = HeyvinuAudio::kI2sWs;
+  pins.data_out_num = HeyvinuAudio::kI2sDout;
+  pins.data_in_num = HeyvinuAudio::kI2sDin;
 
   if (i2s_set_pin(kPort, &pins) != ESP_OK) {
     i2s_driver_uninstall(kPort);

@@ -49,9 +49,9 @@ bool Mp3Player::ensureI2s(int sampleRate) {
   }
 
   i2s_pin_config_t pins = {};
-  pins.bck_io_num = ChitramAudio::kI2sBclk;
-  pins.ws_io_num = ChitramAudio::kI2sWs;
-  pins.data_out_num = ChitramAudio::kI2sDout;
+  pins.bck_io_num = HeyvinuAudio::kI2sBclk;
+  pins.ws_io_num = HeyvinuAudio::kI2sWs;
+  pins.data_out_num = HeyvinuAudio::kI2sDout;
   pins.data_in_num = I2S_PIN_NO_CHANGE;
 
   if (i2s_set_pin(kPort, &pins) != ESP_OK) {
@@ -81,7 +81,7 @@ void Mp3Player::releaseI2s() {
 
 bool Mp3Player::writeSample(int16_t left, int16_t right) {
   (void)right;
-  const int16_t sample = ChitramAudio::applyVolume(left);
+  const int16_t sample = HeyvinuAudio::applyVolume(left);
   size_t written = 0;
   return i2s_write(kPort, &sample, sizeof(sample), &written,
                    pdMS_TO_TICKS(10)) == ESP_OK &&

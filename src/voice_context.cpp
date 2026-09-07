@@ -9,8 +9,8 @@
 
 namespace {
 
-constexpr const char *kDir = "/chitram";
-constexpr const char *kContextDir = "/chitram/context";
+constexpr const char *kDir = "/heyvinu";
+constexpr const char *kContextDir = "/heyvinu/context";
 
 void *psramOrRam(size_t n) {
   void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -282,7 +282,7 @@ int voiceContextList(Storage *storage, char *names, size_t nameLen,
   while (f && n < maxCount) {
     if (!f.isDirectory()) {
       const char *raw = f.name();
-      // SD may return "foo.json" or "/chitram/context/foo.json".
+      // SD may return "foo.json" or "/heyvinu/context/foo.json".
       const char *base = raw;
       const char *slash = strrchr(raw, '/');
       if (slash && slash[1]) base = slash + 1;

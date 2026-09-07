@@ -20,8 +20,8 @@
 namespace {
 
 constexpr const char *kDefaultModel = "google/gemini-3.1-flash-image";
-constexpr const char *kDir = "/chitram";
-constexpr const char *kImgDir = "/chitram/images";
+constexpr const char *kDir = "/heyvinu";
+constexpr const char *kImgDir = "/heyvinu/images";
 constexpr uint32_t kHttpTimeoutMs = 180000;
 constexpr int16_t kPreviewW = 280;
 constexpr int16_t kPreviewH = 240;
@@ -641,8 +641,8 @@ void runJob() {
     }
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", String("Bearer ") + apiKey_);
-    http.addHeader("HTTP-Referer", "https://chitram.device");
-    http.addHeader("X-Title", "chitram");
+    http.addHeader("HTTP-Referer", "https://heyvinu.device");
+    http.addHeader("X-Title", "heyvinu");
 
     Serial.printf("[or-image] POST model=%s prompt_len=%u try=%d\n",
                   model_[0] ? model_ : kDefaultModel,

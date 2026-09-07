@@ -2,7 +2,7 @@
 
 #include "talk_audio.h"
 #include "talk_config.h"
-#include "wake_models/hey_luna_model_data.h"
+#include "wake_models/hey_vinu_model_data.h"
 
 #include <Arduino.h>
 
@@ -21,7 +21,7 @@
 #include "tensorflow/lite/schema/schema_generated.h"
 
 /**
- * microWakeWord streaming detector for "Hey Luna" (hey_luna.tflite).
+ * microWakeWord streaming detector for "Hey Vinu" (hey_vinu.tflite).
  * Feature frontend + stride/sliding-window match ESPHome micro_wake_word.
  */
 
@@ -29,11 +29,11 @@ namespace {
 
 constexpr uint8_t kFeatureSize = 40;
 constexpr uint8_t kFeatureDurationMs = 30;
-constexpr uint8_t kFeatureStepMs = 10; // from hey_luna.json
+constexpr uint8_t kFeatureStepMs = 10; // from hey_vinu.json
 constexpr size_t kTensorArenaSize = 32000;
 constexpr size_t kVarArenaSize = 2048;
 constexpr size_t kSlidingWindow = 5;
-// hey_luna.json probability_cutoff
+// hey_vinu.json probability_cutoff
 constexpr uint8_t kProbCutoff =
     static_cast<uint8_t>(0.5f * 255.0f + 0.5f);
 constexpr int16_t kMinSlicesBeforeDetect = 100;
@@ -109,7 +109,7 @@ bool loadModel() {
   unloadModel();
   if (!registerOps()) return false;
 
-  const tflite::Model *model = tflite::GetModel(kHeyLunaModelData);
+  const tflite::Model *model = tflite::GetModel(kHeyVinuModelData);
   if (model->version() != TFLITE_SCHEMA_VERSION) return false;
 
   tensorArena_ = (uint8_t *)heap_caps_malloc(

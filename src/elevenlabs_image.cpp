@@ -20,8 +20,8 @@ namespace {
 
 constexpr const char *kDefaultModel = "gemini-3.1-flash-image";
 constexpr const char *kHost = "api.elevenlabs.io";
-constexpr const char *kDir = "/chitram";
-constexpr const char *kImgDir = "/chitram/images";
+constexpr const char *kDir = "/heyvinu";
+constexpr const char *kImgDir = "/heyvinu/images";
 constexpr uint32_t kHttpTimeoutMs = 60000;
 constexpr uint32_t kPollIntervalMs = 2500;
 constexpr uint32_t kPollMaxMs = 180000;

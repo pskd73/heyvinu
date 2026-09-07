@@ -16,4 +16,4 @@ Applies to toasts, status lines, button labels, settings titles/descriptions, na
 ✅ Cleared context
 ```
 
-Exceptions: full sentences in long-form help/docs only if the product already uses them; default for chitram UI is short labels without a closing period.
+Exceptions: full sentences in long-form help/docs only if the product already uses them; default for heyvinu UI is short labels without a closing period.

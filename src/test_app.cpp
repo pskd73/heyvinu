@@ -60,6 +60,11 @@ void TestApp::openWifi() {
   self_->goTo(kPageWifi);
 }
 
+void TestApp::openFont() {
+  if (!self_) return;
+  self_->goTo(kPageFont);
+}
+
 void TestApp::onMenuSelect(UISelect &s) {
   if (!self_) return;
   switch (s.selectedValue()) {
@@ -77,6 +82,9 @@ void TestApp::onMenuSelect(UISelect &s) {
     break;
   case kPageWifi:
     self_->openWifi();
+    break;
+  case kPageFont:
+    self_->openFont();
     break;
   default:
     break;
@@ -113,7 +121,12 @@ void TestApp::buildMenu(Page &page) {
                    .icon("wifi")
                    .title("Wi-Fi")
                    .description("Connect + HTTPS reachability")
-                   .value(kPageWifi));
+                   .value(kPageWifi))
+          .add(page.selectOption()
+                   .icon("type")
+                   .title("Font")
+                   .description("Englebert on glass")
+                   .value(kPageFont));
 
   page.add(page.div()
                .style(Style()
@@ -146,7 +159,41 @@ void TestApp::build(Page &page, uint8_t pageId) {
   }
   if (pageId == kPageWifi) {
     buildWifi(page);
+    return;
   }
+  if (pageId == kPageFont) {
+    buildFont(page);
+  }
+}
+
+void TestApp::buildFont(Page &page) {
+  const Theme::ThemeTokens &th = Theme::active();
+  page.add(page.div()
+               .style(Style()
+                          .setWidth(Length::Pct(100))
+                          .setPadding(Edges(16, 12))
+                          .setGap(10)
+                          .setColumns(1))
+               .add(page.text("Hey Vinu").style(
+                   Style()
+                       .setWidth(Length::Pct(100))
+                       .setFont(FontRole::TitleLarge)
+                       .setColor(th.baseContent)))
+               .add(page.text("Generating image").style(
+                   Style()
+                       .setWidth(Length::Pct(100))
+                       .setFont(FontRole::Title)
+                       .setColor(th.baseContent)))
+               .add(page.text("Cleared context").style(
+                   Style()
+                       .setWidth(Length::Pct(100))
+                       .setFont(FontRole::Title)
+                       .setColor(th.baseContent)))
+               .add(page.text("The quick brown fox jumps over the lazy dog")
+                        .style(Style()
+                                   .setWidth(Length::Pct(100))
+                                   .setFont(FontRole::Body)
+                                   .setColor(th.baseContent))));
 }
 
 void TestApp::frame(Canvas &canvas, InputHub &input, float dt) {

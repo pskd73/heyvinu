@@ -87,19 +87,19 @@ const char *Battery::chargeIcon(ChargeState state) {
 }
 
 bool Battery::readChargerGpio(ChargeState &out) {
-  if (ChitramPower::kChrgPin < 0) {
+  if (HeyvinuPower::kChrgPin < 0) {
     return false;
   }
 
-  pinMode(ChitramPower::kChrgPin, INPUT_PULLUP);
-  if (digitalRead(ChitramPower::kChrgPin) == LOW) {
+  pinMode(HeyvinuPower::kChrgPin, INPUT_PULLUP);
+  if (digitalRead(HeyvinuPower::kChrgPin) == LOW) {
     out = ChargeState::Charging;
     return true;
   }
 
-  if (ChitramPower::kStdbyPin >= 0) {
-    pinMode(ChitramPower::kStdbyPin, INPUT_PULLUP);
-    if (digitalRead(ChitramPower::kStdbyPin) == LOW) {
+  if (HeyvinuPower::kStdbyPin >= 0) {
+    pinMode(HeyvinuPower::kStdbyPin, INPUT_PULLUP);
+    if (digitalRead(HeyvinuPower::kStdbyPin) == LOW) {
       out = ChargeState::Full;
       return true;
     }

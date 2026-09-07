@@ -50,7 +50,7 @@
 #include <string.h>
 #include "coder.h"
 
-#if defined(CHITRAM_HELIX_STATIC)
+#if defined(HEYVINU_HELIX_STATIC)
 static MP3DecInfo s_mp3DecInfo;
 static FrameHeader s_fh;
 static SideInfo s_si;
@@ -117,7 +117,7 @@ MP3DecInfo *AllocateBuffers(void) {
     IMDCTInfo *mi;
     SubbandInfo *sbi;
 
-#if defined(CHITRAM_HELIX_STATIC)
+#if defined(HEYVINU_HELIX_STATIC)
     mp3DecInfo = &s_mp3DecInfo;
     fh = &s_fh;
     si = &s_si;
@@ -188,7 +188,7 @@ void FreeBuffers(MP3DecInfo *mp3DecInfo) {
         return;
     }
 
-#if defined(CHITRAM_HELIX_STATIC)
+#if defined(HEYVINU_HELIX_STATIC)
     if (mp3DecInfo != &s_mp3DecInfo) {
         return;
     }

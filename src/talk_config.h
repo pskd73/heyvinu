@@ -5,7 +5,7 @@
 #include <driver/i2s.h>
 #include <stdint.h>
 
-/** Talk / Ask — ElevenLabs ConvAI duplex @ 16 kHz (chitram talk_*). */
+/** Talk / Ask — ElevenLabs ConvAI duplex @ 16 kHz (heyvinu talk_*). */
 #define TALK_SAMPLE_RATE 16000
 #define TALK_I2S_BUF_SAMPLES 256
 /**
@@ -80,8 +80,8 @@
 #define AGC_GAIN_MAX 5.0f
 #define AGC_GAIN_SLEW 0.0012f
 
-#define I2S_SCK ChitramAudio::kI2sBclk
-#define I2S_WS ChitramAudio::kI2sWs
-#define I2S_DOUT ChitramAudio::kI2sDout
-#define I2S_SD ChitramAudio::kI2sDin
+#define I2S_SCK HeyvinuAudio::kI2sBclk
+#define I2S_WS HeyvinuAudio::kI2sWs
+#define I2S_DOUT HeyvinuAudio::kI2sDout
+#define I2S_SD HeyvinuAudio::kI2sDin
 #define I2S_PORT I2S_NUM_0

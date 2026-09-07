@@ -9,7 +9,7 @@ class Storage;
  * ElevenLabs Flows image generation — independent of OpenRouter.
  *
  * POST /v1/flows/image → poll GET → download content_url →
- * /chitram/images/ on SD. Own FreeRTOS task.
+ * /heyvinu/images/ on SD. Own FreeRTOS task.
  */
 
 struct ElImageRequest {

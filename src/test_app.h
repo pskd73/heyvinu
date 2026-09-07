@@ -24,6 +24,7 @@ public:
   static constexpr uint8_t kPageJoy = 3;
   static constexpr uint8_t kPageBattery = 4;
   static constexpr uint8_t kPageWifi = 5;
+  static constexpr uint8_t kPageFont = 6;
 
   explicit TestApp(const Rect &viewport) : App(viewport) {
     setAppInfo("Test", "wrench");
@@ -33,6 +34,7 @@ public:
     addPage("Joystick");
     addPage("Battery");
     addPage("Wi-Fi");
+    addPage("Font");
     self_ = this;
   }
 
@@ -141,7 +143,9 @@ private:
   void openJoy();
   void openBattery();
   void openWifi();
+  void openFont();
   void buildMenu(Page &page);
+  void buildFont(Page &page);
 
   static void onMenuSelect(UISelect &s);
 

@@ -6,7 +6,7 @@
 
 class Storage;
 
-/** Stream-decodes an MP3 from SD and writes PCM to Chitram I2S speaker. */
+/** Stream-decodes an MP3 from SD and writes PCM to Heyvinu I2S speaker. */
 class Mp3Player {
 public:
   bool begin(Storage *storage, const char *path);

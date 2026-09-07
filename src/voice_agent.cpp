@@ -2,15 +2,8 @@
 
 #include "deepgram_agent.h"
 #include "elevenlabs_agent.h"
-#include "runtime_config.h"
-
-#include <string.h>
 
 VoiceProvider voiceProvider() {
-  const char *v = getConfig(Config::VoiceProvider);
-  if (v && (strcmp(v, "deepgram") == 0 || strcmp(v, "dg") == 0)) {
-    return VoiceProvider::Deepgram;
-  }
   return VoiceProvider::ElevenLabs;
 }
 

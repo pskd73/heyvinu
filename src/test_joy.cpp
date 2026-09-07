@@ -11,7 +11,7 @@ namespace {
 constexpr int kCenter = 2048;
 
 void mappedDeltas(int rawX, int rawY, int &horiz, int &vert) {
-#if defined(CHITRAM_JOY_HORIZ_ON_Y) || defined(CHITRAM_JOY_SWAP_XY)
+#if defined(HEYVINU_JOY_HORIZ_ON_Y) || defined(HEYVINU_JOY_SWAP_XY)
   horiz = rawY - kCenter;
   vert = rawX - kCenter;
 #else
@@ -19,10 +19,10 @@ void mappedDeltas(int rawX, int rawY, int &horiz, int &vert) {
   horiz = rawX - kCenter;
   vert = rawY - kCenter;
 #endif
-#if defined(CHITRAM_JOY_INVERT_HORIZ)
+#if defined(HEYVINU_JOY_INVERT_HORIZ)
   horiz = -horiz;
 #endif
-#if defined(CHITRAM_JOY_INVERT_VERT)
+#if defined(HEYVINU_JOY_INVERT_VERT)
   vert = -vert;
 #endif
 }
@@ -67,9 +67,9 @@ const char *directionLabel(int horiz, int vert, int deadzone) {
 void TestApp::formatJoyLines() {
   int rawX = 0;
   int rawY = 0;
-  const bool ok = JoystickInput::readRawAxes(ChitramInput::kJoyPinX,
-                                             ChitramInput::kJoyPinY, rawX, rawY);
-  const bool sw = digitalRead(ChitramInput::kJoyPinSw) == LOW;
+  const bool ok = JoystickInput::readRawAxes(HeyvinuInput::kJoyPinX,
+                                             HeyvinuInput::kJoyPinY, rawX, rawY);
+  const bool sw = digitalRead(HeyvinuInput::kJoyPinSw) == LOW;
 
   if (!ok) {
     snprintf(joySummary_, sizeof(joySummary_), "Joystick\nADC fail");
@@ -80,7 +80,7 @@ void TestApp::formatJoyLines() {
   int vert = 0;
   mappedDeltas(rawX, rawY, horiz, vert);
   const char *dir =
-      directionLabel(horiz, vert, static_cast<int>(ChitramInput::kJoyDeadzone));
+      directionLabel(horiz, vert, static_cast<int>(HeyvinuInput::kJoyDeadzone));
 
   if (sw) {
     snprintf(joySummary_, sizeof(joySummary_), "Joystick\n%s\nSelect", dir);
@@ -97,9 +97,9 @@ void TestApp::onJoyTick(UINode &node, float dt) {
 
   int rawX = 0;
   int rawY = 0;
-  const bool ok = JoystickInput::readRawAxes(ChitramInput::kJoyPinX,
-                                             ChitramInput::kJoyPinY, rawX, rawY);
-  const bool sw = digitalRead(ChitramInput::kJoyPinSw) == LOW;
+  const bool ok = JoystickInput::readRawAxes(HeyvinuInput::kJoyPinX,
+                                             HeyvinuInput::kJoyPinY, rawX, rawY);
+  const bool sw = digitalRead(HeyvinuInput::kJoyPinSw) == LOW;
   const bool changed = ok != self_->lastOk_ || rawX != self_->lastX_ ||
                        rawY != self_->lastY_ || sw != self_->lastSw_;
 
@@ -138,6 +138,6 @@ void TestApp::buildJoy(Page &page) {
 }
 
 void TestApp::enterJoy() {
-  pinMode(ChitramInput::kJoyPinSw, INPUT_PULLUP);
+  pinMode(HeyvinuInput::kJoyPinSw, INPUT_PULLUP);
   formatJoyLines();
 }

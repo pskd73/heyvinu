@@ -26,7 +26,7 @@ struct Max17048Sample {
   float cratePercentHr = 0.f;
 };
 
-/** MAX17048 fuel gauge on Chitram I2C bus. */
+/** MAX17048 fuel gauge on Heyvinu I2C bus. */
 class Max17048 {
 public:
   bool begin();

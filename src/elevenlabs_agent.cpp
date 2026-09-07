@@ -959,10 +959,10 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
       logf("WS disconnected\n");
     }
     if (pendingEndCall) {
-      // Peer closed while we were draining farewell — treat as clean hang-up.
-      pendingEndCall = false;
-      endedByAgent = true;
-      setStatus("Idle");
+      // Peer closed the socket; farewell may still be in the play ring.
+      agentReady = false;
+      logf("WS closed during end_call — draining playback\n");
+      break;
     } else if (!agentReady && lastInitHadContext) {
       // Peer closed before conversation_initiation_metadata — almost always
       // the continue payload (undeclared dynamic vars / oversized context).
@@ -1556,9 +1556,11 @@ void elAgentLoop() {
   // stopWsTask does not wait on the ws task from inside itself.
   if (!pendingEndCall || !agentActive) return;
 
+  static constexpr uint32_t kEndCallMinWaitMs = 1000;
   static constexpr uint32_t kEndCallDrainTailMs = 400;
   static constexpr uint32_t kEndCallTimeoutMs = 12000;
   const uint32_t now = millis();
+  if (endCallAtMs != 0 && (now - endCallAtMs) < kEndCallMinWaitMs) return;
   const bool drained =
       talkPlayRingEmpty() &&
       (lastAgentAudioMs == 0 ||

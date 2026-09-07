@@ -20,7 +20,7 @@ constexpr size_t kVoiceContextInjectMax = 1800;
  * - ElevenLabs: plain transcript via dynamic_variables.conversation_context
  * - Deepgram: structured agent.context.messages History entries
  *
- * Path: /chitram/context/<agent_id>.json + .txt  (card-rooted)
+ * Path: /heyvinu/context/<agent_id>.json + .txt  (card-rooted)
  * Text lives in PSRAM; only a pointer + metadata sit in internal RAM.
  *
  * On-disk text format (shared): lines `User: …\n` / `Agent: …\n`.
@@ -48,7 +48,7 @@ bool voiceContextSave(Storage *storage, const char *agentId,
 bool voiceContextClear(Storage *storage, const char *agentId);
 
 /**
- * List agent ids that have a context `.json` under /chitram/context.
+ * List agent ids that have a context `.json` under /heyvinu/context.
  * Writes up to `maxCount` NUL-terminated names (no `.json`) into `names[][nameLen]`.
  * Returns count written.
  */

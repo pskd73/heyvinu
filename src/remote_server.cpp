@@ -10,8 +10,8 @@
 
 namespace {
 
-static constexpr const char *kApSsid = "Chitram-Remote";
-static constexpr const char *kApPassword = "chitramsetup";
+static constexpr const char *kApSsid = "Heyvinu-Remote";
+static constexpr const char *kApPassword = "heyvinusetup";
 
 WebServer *server = nullptr;
 bool running = false;
@@ -45,7 +45,7 @@ static String buildFormPage() {
   page.reserve(4096);
   page += F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>Chitram Remote</title>"
+            "<title>Heyvinu Remote</title>"
             "<style>"
             "body{font-family:system-ui,sans-serif;margin:16px;max-width:520px}"
             "label{display:block;margin-top:12px;font-weight:600}"
@@ -53,7 +53,7 @@ static String buildFormPage() {
             "button{margin-top:18px;padding:10px 16px;font-size:16px}"
             ".hint{color:#666;font-size:14px;margin-top:8px}"
             "</style></head><body>"
-            "<h1>Chitram Remote</h1>"
+            "<h1>Heyvinu Remote</h1>"
             "<p class='hint'>Config is saved on device and persists across reboots.</p>"
             "<form method='POST' action='/save'>");
 

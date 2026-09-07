@@ -3,7 +3,7 @@
 class AppHost;
 
 /**
- * Always-on local wake for the launcher (microWakeWord / Hey Luna).
+ * Always-on local wake for the launcher (microWakeWord / Hey Vinu).
  *
  * Fully on-device TFLite Micro — no cloud STT. Stop before Ask / Talk so I2S
  * is free for the voice agent.

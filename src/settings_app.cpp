@@ -1,10 +1,8 @@
 #include "settings_app.h"
 
-#include "runtime_config.h"
 #include "voice_context.h"
 
 #include <stdio.h>
-#include <string.h>
 
 SettingsApp *SettingsApp::self_ = nullptr;
 
@@ -54,19 +52,6 @@ void SettingsApp::onWakeWordChange(UIToggle &t) {
   Serial.printf("Settings: wake_word=%d\n", t.checked() ? 1 : 0);
 }
 
-void SettingsApp::onVoiceProviderSelect(UISelect &s) {
-  if (!self_) return;
-  const char *v = (s.selected() == 1) ? "deepgram" : "elevenlabs";
-  setConfig(Config::VoiceProvider, v);
-  Serial.printf("Settings: voice_provider=%s\n", v);
-  if (self_->host()) {
-    char toast[40];
-    snprintf(toast, sizeof(toast), "Voice: %s",
-             s.selected() == 1 ? "Deepgram" : "ElevenLabs");
-    self_->host()->showToast(toast, ToastKind::Success);
-  }
-}
-
 void SettingsApp::onMainMenu(UISelect &s) {
   if (!self_) return;
   if (s.selectedValue() == kPageClearContext) {
@@ -112,14 +97,11 @@ void SettingsApp::buildMain(Page &page) {
   const SettingsState &st = state();
   const Theme::ThemeTokens &th = Theme::active();
   const uint16_t muted = Theme::lerp(th.baseContent, th.base100, 0.4f);
-  const char *vp = getConfig(Config::VoiceProvider);
-  const int16_t voiceSel =
-      (vp && (strcmp(vp, "deepgram") == 0 || strcmp(vp, "dg") == 0)) ? 1 : 0;
 
   auto sectionLabel = [&](const char *label) -> UIText & {
     return page.text(label).style(Style()
                                       .setWidth(Length::Pct(100))
-                                      .setFont(FontRole::Small)
+                                      .setFont(FontRole::Title)
                                       .setColor(muted)
                                       .setAlign(Align::Start));
   };
@@ -138,22 +120,6 @@ void SettingsApp::buildMain(Page &page) {
                    .icon("snowflake")
                    .title("Winter")
                    .description("Cool light surfaces")
-                   .value(1));
-
-  auto &voiceChooser =
-      page.select()
-          .selected(voiceSel)
-          .onChange(onVoiceProviderSelect)
-          .style(Style().setWidth(Length::Pct(100)).setGap(6))
-          .add(page.selectOption()
-                   .icon("mic")
-                   .title("ElevenLabs")
-                   .description("ConvAI voice agent")
-                   .value(0))
-          .add(page.selectOption()
-                   .icon("radio")
-                   .title("Deepgram")
-                   .description("Voice Agent (Aura + Flux)")
                    .value(1));
 
   auto &vizRow =
@@ -227,7 +193,6 @@ void SettingsApp::buildMain(Page &page) {
                                    .setGap(6)
                                    .setColumns(1))
                         .add(sectionLabel("AI"))
-                        .add(voiceChooser)
                         .add(vizRow)
                         .add(wakeRow)
                         .add(tools)));

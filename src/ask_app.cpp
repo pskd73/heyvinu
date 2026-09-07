@@ -506,7 +506,7 @@ void AskApp::noteImageInteraction() {
 
 int16_t AskApp::volumeBarCount() const {
   int16_t bars =
-      static_cast<int16_t>(ChitramAudio::volumePercent() / kVolumeStep);
+      static_cast<int16_t>(HeyvinuAudio::volumePercent() / kVolumeStep);
   if (bars < 0) bars = 0;
   if (bars > kVolumeBars) bars = kVolumeBars;
   return bars;
@@ -530,7 +530,7 @@ void AskApp::paintVolumeBars(UIDiv &wrap) const {
 }
 
 bool AskApp::adjustVolume(int16_t delta) {
-  const int16_t cur = ChitramAudio::volumePercent();
+  const int16_t cur = HeyvinuAudio::volumePercent();
   int16_t bars = static_cast<int16_t>(cur / kVolumeStep);
   if (bars > kVolumeBars) bars = kVolumeBars;
   if (delta > 0) {
@@ -544,7 +544,7 @@ bool AskApp::adjustVolume(int16_t delta) {
   if (next == cur) {
     return false;
   }
-  ChitramAudio::setVolumePercent(next);
+  HeyvinuAudio::setVolumePercent(next);
   // Bars repaint through the normal tick, which holds off while the agent is
   // speaking — the gain itself already changed.
   volumeDirty_ = true;
